@@ -34,6 +34,7 @@ type CapturedRequest struct {
 	StatusText      string            `json:"statusText"`
 	ResponseHeaders map[string]string `json:"responseHeaders"`
 	ResponseBody    string            `json:"responseBody,omitempty"`
+	RequestID       string            `json:"-"` // Internal use only, not exported to JSON
 }
 
 // CaptureConfig holds configuration for web capture
@@ -179,6 +180,7 @@ func (wc *WebCapture) handleRequestWillBeSent(ev *network.EventRequestWillBeSent
 		Method:         ev.Request.Method,
 		RequestHeaders: reqHeaders,
 		RequestBody:    ev.Request.PostData,
+		RequestID:      ev.RequestID.String(), // Store RequestID for proper matching
 	}
 
 	// Store with request ID for later matching with response
@@ -201,27 +203,32 @@ func (wc *WebCapture) handleResponseReceived(ctx context.Context, ev *network.Ev
 		}
 	}
 
-	// Find matching request and update it
+	// Find matching request using RequestID for accurate matching
+	requestID := ev.RequestID.String()
 	for i := range wc.requests {
-		if wc.requests[i].URL == ev.Response.URL && wc.requests[i].Status == 0 {
+		if wc.requests[i].RequestID == requestID {
 			wc.requests[i].Status = int(ev.Response.Status)
 			wc.requests[i].StatusText = ev.Response.StatusText
 			wc.requests[i].ResponseHeaders = respHeaders
 
-			// Try to get response body
-			go wc.getResponseBody(ctx, ev.RequestID, &wc.requests[i])
+			// Get response body asynchronously
+			go wc.getResponseBody(ctx, ev.RequestID, i)
 			break
 		}
 	}
 }
 
 // getResponseBody retrieves the response body for a request
-func (wc *WebCapture) getResponseBody(ctx context.Context, reqID network.RequestID, req *CapturedRequest) {
+func (wc *WebCapture) getResponseBody(ctx context.Context, reqID network.RequestID, requestIndex int) {
 	body, err := network.GetResponseBody(reqID).Do(ctx)
 	if err == nil && len(body) > 0 {
 		wc.requestMutex.Lock()
-		req.ResponseBody = string(body)
-		wc.requestMutex.Unlock()
+		defer wc.requestMutex.Unlock()
+		
+		// Verify the index is still valid
+		if requestIndex < len(wc.requests) {
+			wc.requests[requestIndex].ResponseBody = string(body)
+		}
 	}
 }
 
@@ -300,8 +307,15 @@ func (wc *WebCapture) extractResources() {
 	// Save resources list
 	if len(resources) > 0 {
 		resourcesPath := filepath.Join(wc.config.OutputDir, "resources.json")
-		data, _ := json.MarshalIndent(resources, "", "  ")
-		os.WriteFile(resourcesPath, data, 0644)
+		data, err := json.MarshalIndent(resources, "", "  ")
+		if err != nil {
+			log.Printf("Failed to marshal resources: %v", err)
+			return
+		}
+		if err := os.WriteFile(resourcesPath, data, 0644); err != nil {
+			log.Printf("Failed to save resources: %v", err)
+			return
+		}
 		log.Printf("Resources list saved: %s", resourcesPath)
 	}
 }
