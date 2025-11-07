@@ -1610,30 +1610,38 @@ func selectPickupPoint(client *http.Client, options HitOptions) error {
 	
 	json.Unmarshal(body, &pickupPointsResp)
 	
+	addDebugLog("AUTOHIT", fmt.Sprintf("Found %d pickup points", len(pickupPointsResp.DeliveryLocations)))
+	
+	if len(pickupPointsResp.DeliveryLocations) == 0 {
+		return fmt.Errorf("no pickup points found - response: %s", string(body))
+	}
+	
 	// Find INSTABOX or BUDBEE pickup point (not the closest one)
 	selectedIndex := -1
 	
+	// First try to find INSTABOX or BUDBEE (skip first if possible)
 	for i, loc := range pickupPointsResp.DeliveryLocations {
-		if i == 0 {
-			// Skip the closest one
-			continue
-		}
-		
 		locationName := strings.ToUpper(loc.Name)
 		if strings.Contains(locationName, "INSTABOX") || strings.Contains(locationName, "BUDBEE") {
+			// Skip the first one only if we have more options
+			if i == 0 && len(pickupPointsResp.DeliveryLocations) > 1 {
+				continue
+			}
 			selectedIndex = i
-			addDebugLog("AUTOHIT", fmt.Sprintf("Found pickup point: %s", loc.Name))
+			addDebugLog("AUTOHIT", fmt.Sprintf("Found %s pickup point: %s", loc.Name, loc.Address.Street))
 			break
 		}
 	}
 	
-	// Fallback: if no INSTABOX/BUDBEE found (excluding first), use any non-first
-	if selectedIndex == -1 && len(pickupPointsResp.DeliveryLocations) > 1 {
-		selectedIndex = 1
-	}
-	
+	// Fallback: use second location if available, or first location if only one exists
 	if selectedIndex == -1 {
-		return fmt.Errorf("no suitable pickup points found")
+		if len(pickupPointsResp.DeliveryLocations) > 1 {
+			selectedIndex = 1
+			addDebugLog("AUTOHIT", fmt.Sprintf("Using fallback pickup point: %s", pickupPointsResp.DeliveryLocations[1].Name))
+		} else {
+			selectedIndex = 0
+			addDebugLog("AUTOHIT", fmt.Sprintf("Using only available pickup point: %s", pickupPointsResp.DeliveryLocations[0].Name))
+		}
 	}
 	
 	selectedLocation := pickupPointsResp.DeliveryLocations[selectedIndex]
