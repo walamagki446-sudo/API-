@@ -1409,9 +1409,10 @@ func addProductToCart(client *http.Client, productURL, proxyURL string) error {
 	
 	// Use GraphQL to add to cart (format from captured APIs)
 	// The actual format uses an array with id and variables
+	// The "id" is a persisted query hash that Zalando uses for their GraphQL API
 	addToCartPayload := []map[string]interface{}{
 		{
-			"id": generateGraphQLID(),
+			"id": "b4e7fbd5d2886732b3fa200fcff583ef0931c246ed50417203922471e7bc42ad",
 			"variables": map[string]interface{}{
 				"addToCartInput": map[string]string{
 					"clientMutationId": "addToCartMutation",
@@ -1905,11 +1906,4 @@ func truncateURL(url string) string {
 		return url[:57] + "..."
 	}
 	return url
-}
-
-func generateGraphQLID() string {
-	// Generate a random 64-character hex string for GraphQL request ID
-	b := make([]byte, 32)
-	rand.Read(b)
-	return fmt.Sprintf("%x", b)
 }
