@@ -771,7 +771,7 @@ func checkZalandoLogin(email, password string) (isValid bool, isSkipped bool, er
 		req.Header.Set("Sec-Ch-Ua", `"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"`)
 		req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
 		req.Header.Set("Sec-Ch-Ua-Platform", `"Windows"`)
-		req.Header.Set("x-xsrf-token", csrfToken)
+		req.Header.Set("x-csrf-token", csrfToken)
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -1345,7 +1345,7 @@ func loginAndGetClient(options HitOptions) (*http.Client, error) {
 	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Origin", "https://accounts.zalando.com")
 	req.Header.Set("Referer", "https://accounts.zalando.com/authenticate")
-	req.Header.Set("x-xsrf-token", csrfToken)
+	req.Header.Set("x-csrf-token", csrfToken)
 	
 	resp, err := client.Do(req)
 	if err != nil {
