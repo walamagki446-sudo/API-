@@ -1,0 +1,37 @@
+# Build artifacts
+web-capture
+web-capture-linux
+web-capture-mac
+web-capture.exe
+*.exe
+
+# Capture output directories
+capture_*/
+test_capture/
+my_capture/
+
+# Go build cache
+*.test
+*.out
+
+# Dependency directories
+vendor/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+
+# Environment files
+.env
+.env.local
