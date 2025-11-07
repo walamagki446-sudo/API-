@@ -1396,27 +1396,21 @@ func addProductToCart(client *http.Client, productURL, proxyURL string) error {
 	
 	humanDelay(800, 1500)
 	
-	// Use GraphQL to add to cart
-	graphqlQuery := `mutation AddToCart($configSku: String!, $quantity: Int!) {
-		addToCart(configSku: $configSku, quantity: $quantity) {
-			cart {
-				id
-				itemsCount
-			}
-		}
-	}`
-	
-	variables := map[string]interface{}{
-		"configSku": sku,
-		"quantity":  1,
+	// Use GraphQL to add to cart (format from captured APIs)
+	// The actual format uses an array with id and variables
+	addToCartPayload := []map[string]interface{}{
+		{
+			"id": generateGraphQLID(),
+			"variables": map[string]interface{}{
+				"addToCartInput": map[string]string{
+					"clientMutationId": "addToCartMutation",
+					"productId":        sku,
+				},
+			},
+		},
 	}
 	
-	addToCartReq := AddToCartRequest{
-		Query:     graphqlQuery,
-		Variables: variables,
-	}
-	
-	jsonData, _ := json.Marshal(addToCartReq)
+	jsonData, _ := json.Marshal(addToCartPayload)
 	
 	req, _ = http.NewRequest("POST", "https://www.zalando.se/api/graphql/add-to-cart/", bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
@@ -1435,6 +1429,21 @@ func addProductToCart(client *http.Client, productURL, proxyURL string) error {
 	
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("add to cart failed with status %d: %s", resp.StatusCode, string(body))
+	}
+	
+	// Check for errors in response
+	var result []map[string]interface{}
+	json.Unmarshal(body, &result)
+	if len(result) > 0 {
+		if data, ok := result[0]["data"].(map[string]interface{}); ok {
+			if _, ok := data["addToCart"]; ok {
+				addDebugLog("AUTOHIT", "Product added to cart successfully")
+				return nil
+			}
+		}
+		if errors, ok := result[0]["errors"]; ok {
+			return fmt.Errorf("GraphQL error: %v", errors)
+		}
 	}
 	
 	addDebugLog("AUTOHIT", "Product added to cart successfully")
@@ -1495,20 +1504,37 @@ func selectPickupPoint(client *http.Client, proxyURL string) error {
 	if err != nil {
 		return fmt.Errorf("failed to save phone number: %w", err)
 	}
-	io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
+	
+	// Extract customer info from response
+	var customerInfo struct {
+		Email     string `json:"email"`
+		Phone     string `json:"phoneNumber"`
+		FirstName string `json:"firstname"`
+		LastName  string `json:"lastname"`
+		Gender    string `json:"gender"`
+	}
+	json.Unmarshal(body, &customerInfo)
 	
 	humanDelay(500, 1000)
 	
-	// Search for pickup points (using a default Swedish address)
-	searchPayload := map[string]interface{}{
-		"address": map[string]string{
-			"street":     "Drottninggatan 1",
-			"postalCode": "111 51",
-			"city":       "Stockholm",
+	// Get user's default address from the checkout page
+	// For now, use a placeholder address structure
+	addressPayload := map[string]interface{}{
+		"address": map[string]interface{}{
+			"salutation":   "Mr",
+			"first_name":   customerInfo.FirstName,
+			"last_name":    customerInfo.LastName,
+			"zip":          "11151", // Stockholm default
+			"city":         "Stockholm",
+			"country_code": "SE",
+			"street":       "Drottninggatan 1",
+			"additional":   "",
 		},
 	}
-	jsonData, _ = json.Marshal(searchPayload)
+	
+	jsonData, _ = json.Marshal(addressPayload)
 	
 	req, _ = http.NewRequest("POST", "https://www.zalando.se/api/checkout/search-pickup-points-by-address", bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
@@ -1523,56 +1549,89 @@ func selectPickupPoint(client *http.Client, proxyURL string) error {
 	}
 	defer resp.Body.Close()
 	
-	body, _ := io.ReadAll(resp.Body)
+	body, _ = io.ReadAll(resp.Body)
 	
-	// Parse pickup points and select INSTABOX or BUDBEE
+	// Parse pickup points response
 	var pickupPointsResp struct {
-		PickupPoints []struct {
-			ID       string `json:"id"`
-			Name     string `json:"name"`
-			Provider string `json:"provider"`
-		} `json:"pickupPoints"`
+		DeliveryLocations []struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			Distance    string `json:"distance"`
+			GeoPosition struct {
+				Latitude  float64 `json:"latitude"`
+				Longitude float64 `json:"longitude"`
+			} `json:"geoPosition"`
+			Address struct {
+				City        string `json:"city"`
+				Country     string `json:"country"`
+				Street      string `json:"street"`
+				Zip         string `json:"zip"`
+				CountryCode string `json:"countryCode"`
+			} `json:"address"`
+			DeliveryProductOptions []struct {
+				DeliveryProductID  string `json:"deliveryProductId"`
+				ExternalLocationID string `json:"externalLocationId"`
+				Carrier            string `json:"carrier"`
+				Destination        string `json:"destination"`
+				Service            string `json:"service"`
+			} `json:"deliveryProductOptions"`
+		} `json:"deliveryLocations"`
 	}
 	
 	json.Unmarshal(body, &pickupPointsResp)
 	
-	var selectedPoint string
-	for _, point := range pickupPointsResp.PickupPoints {
-		provider := strings.ToUpper(point.Provider)
-		if strings.Contains(provider, "INSTABOX") || strings.Contains(provider, "BUDBEE") {
-			// Don't select the first one (closest), select a random one that's not first
-			selectedPoint = point.ID
+	// Find INSTABOX or BUDBEE pickup point (not the closest one)
+	selectedIndex := -1
+	
+	for i, loc := range pickupPointsResp.DeliveryLocations {
+		if i == 0 {
+			// Skip the closest one
+			continue
+		}
+		
+		locationName := strings.ToUpper(loc.Name)
+		if strings.Contains(locationName, "INSTABOX") || strings.Contains(locationName, "BUDBEE") {
+			selectedIndex = i
+			addDebugLog("AUTOHIT", fmt.Sprintf("Found pickup point: %s", loc.Name))
 			break
 		}
 	}
 	
-	// If we found INSTABOX/BUDBEE points but want to skip the closest
-	if selectedPoint == "" && len(pickupPointsResp.PickupPoints) > 1 {
-		// Just pick the second one
-		for i, point := range pickupPointsResp.PickupPoints {
-			provider := strings.ToUpper(point.Provider)
-			if (strings.Contains(provider, "INSTABOX") || strings.Contains(provider, "BUDBEE")) && i > 0 {
-				selectedPoint = point.ID
-				break
-			}
-		}
+	// Fallback: if no INSTABOX/BUDBEE found (excluding first), use any non-first
+	if selectedIndex == -1 && len(pickupPointsResp.DeliveryLocations) > 1 {
+		selectedIndex = 1
 	}
 	
-	if selectedPoint == "" && len(pickupPointsResp.PickupPoints) > 0 {
-		// Fallback: use any pickup point
-		selectedPoint = pickupPointsResp.PickupPoints[0].ID
+	if selectedIndex == -1 {
+		return fmt.Errorf("no suitable pickup points found")
 	}
 	
-	if selectedPoint == "" {
-		return fmt.Errorf("no pickup points found")
-	}
+	selectedLocation := pickupPointsResp.DeliveryLocations[selectedIndex]
 	
 	humanDelay(800, 1500)
 	
-	// Select the pickup point
+	// Select the pickup point with full payload structure
 	selectPayload := map[string]interface{}{
-		"pickupPointId": selectedPoint,
+		"address": addressPayload["address"],
+		"deliveryLocation": map[string]interface{}{
+			"id":       selectedLocation.ID,
+			"distance": selectedLocation.Distance,
+			"geoPosition": map[string]interface{}{
+				"latitude":  selectedLocation.GeoPosition.Latitude,
+				"longitude": selectedLocation.GeoPosition.Longitude,
+			},
+			"name": selectedLocation.Name,
+			"address": map[string]interface{}{
+				"city":        selectedLocation.Address.City,
+				"country":     selectedLocation.Address.Country,
+				"street":      selectedLocation.Address.Street,
+				"zip":         selectedLocation.Address.Zip,
+				"countryCode": selectedLocation.Address.CountryCode,
+			},
+			"deliveryProductOptions": selectedLocation.DeliveryProductOptions,
+		},
 	}
+	
 	jsonData, _ = json.Marshal(selectPayload)
 	
 	req, _ = http.NewRequest("POST", "https://www.zalando.se/api/checkout/select-pickup-point", bytes.NewBuffer(jsonData))
@@ -1589,7 +1648,25 @@ func selectPickupPoint(client *http.Client, proxyURL string) error {
 	io.ReadAll(resp.Body)
 	resp.Body.Close()
 	
-	addDebugLog("AUTOHIT", fmt.Sprintf("Selected pickup point: %s", selectedPoint))
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("pickup point selection failed with status %d", resp.StatusCode)
+	}
+	
+	addDebugLog("AUTOHIT", fmt.Sprintf("Selected pickup point: %s", selectedLocation.Name))
+	
+	// Call next-step to proceed to payment
+	humanDelay(500, 1000)
+	req, _ = http.NewRequest("GET", "https://www.zalando.se/api/checkout/next-step", nil)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Referer", "https://www.zalando.se/checkout/address")
+	
+	resp, err = client.Do(req)
+	if err == nil {
+		io.ReadAll(resp.Body)
+		resp.Body.Close()
+	}
+	
 	return nil
 }
 
@@ -1687,29 +1764,23 @@ func humanDelay(minMs, maxMs int) {
 
 func extractSKUFromURL(productURL string) string {
 	// Example URL: https://www.zalando.se/polo-ralph-lauren-the-gorham-glossed-down-jacket-dunjacka-black-po222t0fo-q11.html
-	// SKU is the part before .html
+	// SKU format: PO222T0FO-Q11000S000 (uppercase with size code)
 	parts := strings.Split(productURL, "/")
 	if len(parts) > 0 {
 		lastPart := parts[len(parts)-1]
 		sku := strings.TrimSuffix(lastPart, ".html")
-		// Extract the SKU code (last part after last dash)
+		
+		// Extract the config SKU (last part after last dash)
 		skuParts := strings.Split(sku, "-")
-		if len(skuParts) > 0 {
-			// The SKU is usually the last part in format like "po222t0fo-q11"
-			// We need the whole last segment
-			for i := len(skuParts) - 1; i >= 0; i-- {
-				if len(skuParts[i]) > 5 && strings.Contains(skuParts[i], "0") {
-					// This looks like a SKU
-					if i > 0 {
-						return strings.ToUpper(skuParts[i-1] + "-" + skuParts[i])
-					}
-					return strings.ToUpper(skuParts[i])
-				}
-			}
-			// Fallback: last two parts
-			if len(skuParts) >= 2 {
-				return strings.ToUpper(skuParts[len(skuParts)-2] + "-" + skuParts[len(skuParts)-1])
-			}
+		if len(skuParts) >= 2 {
+			// The SKU is usually in format like "po222t0fo-q11"
+			// We need to construct the full SKU: PO222T0FO-Q11000S000
+			baseCode := strings.ToUpper(skuParts[len(skuParts)-2])
+			variantCode := strings.ToUpper(skuParts[len(skuParts)-1])
+			
+			// Add size code (000S000 is a common default size)
+			fullSKU := baseCode + "-" + variantCode + "000S000"
+			return fullSKU
 		}
 	}
 	return ""
@@ -1739,4 +1810,11 @@ func truncateURL(url string) string {
 		return url[:57] + "..."
 	}
 	return url
+}
+
+func generateGraphQLID() string {
+	// Generate a random 64-character hex string for GraphQL request ID
+	b := make([]byte, 32)
+	rand.Read(b)
+	return fmt.Sprintf("%x", b)
 }
