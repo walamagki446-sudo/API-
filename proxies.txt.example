@@ -1,0 +1,24 @@
+# Proxy Configuration Examples
+# 
+# Supported formats:
+# 1. SOCKS5 with authentication: socks5://username:password@host:port
+# 2. SOCKS5 without auth: socks5://host:port or simply host:port
+# 3. HTTP with authentication: http://username:password@host:port
+# 4. Colon-separated format: host:port:username:password
+#
+# Examples:
+
+# SOCKS5 with auth
+# socks5://myuser:mypass@proxy1.example.com:1080
+
+# SOCKS5 without auth
+# socks5://proxy2.example.com:1080
+# proxy3.example.com:1080
+
+# HTTP with auth
+# http://myuser:mypass@proxy4.example.com:8080
+
+# Colon-separated format (auto-detected as SOCKS5 or HTTP)
+# proxy5.example.com:8080:username:password
+
+# Add your proxies below (one per line, remove the # to uncomment):
