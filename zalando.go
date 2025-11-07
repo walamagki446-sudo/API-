@@ -96,6 +96,7 @@ type HitOptions struct {
 	ProductURL  string
 	BrowseMode  bool
 	ProxyURL    string
+	PhoneNumber string // Default: 0767541615
 }
 
 type HitResult struct {
@@ -552,7 +553,7 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	if msg.Command() == "hit" {
 		args := strings.TrimSpace(msg.CommandArguments())
 		if args == "" {
-			sendMessage(bot, msg.Chat.ID, "❌ Usage: /hit email:password product\\_url \\[browse\\]\n\nExample:\n`/hit test@mail\\.com:pass123 https://www\\.zalando\\.se/product browse`", true)
+			sendMessage(bot, msg.Chat.ID, "❌ Usage: /hit email:password product\\_url \\[browse\\] \\[phone\\]\n\nExample:\n`/hit test@mail\\.com:pass123 https://www\\.zalando\\.se/product browse 0767541615`", true)
 			return
 		}
 		
@@ -569,10 +570,20 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 		}
 		
 		options := HitOptions{
-			Email:      credParts[0],
-			Password:   credParts[1],
-			ProductURL: parts[1],
-			BrowseMode: len(parts) >= 3 && strings.ToLower(parts[2]) == "browse",
+			Email:       credParts[0],
+			Password:    credParts[1],
+			ProductURL:  parts[1],
+			BrowseMode:  false,
+			PhoneNumber: "0767541615", // Default
+		}
+		
+		// Check for browse mode and phone number
+		for i := 2; i < len(parts); i++ {
+			if strings.ToLower(parts[i]) == "browse" {
+				options.BrowseMode = true
+			} else if len(parts[i]) >= 10 && strings.HasPrefix(parts[i], "0") {
+				options.PhoneNumber = parts[i]
+			}
 		}
 		
 		if proxyManager != nil && len(proxyManager.proxies) > 0 {
@@ -1232,7 +1243,7 @@ func performAutoHit(options HitOptions) HitResult {
 	
 	// Step 5: Handle address and delivery (pickup point)
 	addDebugLog("AUTOHIT", "Step 5: Select pickup point")
-	err = selectPickupPoint(client, options.ProxyURL)
+	err = selectPickupPoint(client, options)
 	if err != nil {
 		addDebugLog("AUTOHIT-ERROR", fmt.Sprintf("Pickup point selection failed: %v", err))
 		return HitResult{Success: false, Error: err, Message: "Failed to select pickup point"}
@@ -1484,12 +1495,17 @@ func navigateToCheckout(client *http.Client, proxyURL string) error {
 	return nil
 }
 
-func selectPickupPoint(client *http.Client, proxyURL string) error {
+func selectPickupPoint(client *http.Client, options HitOptions) error {
 	ua := userAgents[rand.Intn(len(userAgents))]
+	
+	phoneNumber := options.PhoneNumber
+	if phoneNumber == "" {
+		phoneNumber = "0767541615" // Fallback
+	}
 	
 	// Set phone number first
 	phonePayload := map[string]interface{}{
-		"phoneNumber": "0767541615",
+		"phoneNumber": phoneNumber,
 	}
 	jsonData, _ := json.Marshal(phonePayload)
 	
@@ -1819,8 +1835,7 @@ func completeOrder(client *http.Client, proxyURL string) (string, error) {
 		}
 		
 		if orderID == "" {
-			// Generate a placeholder based on timestamp
-			orderID = fmt.Sprintf("ORDER-%d", time.Now().Unix())
+			return "", fmt.Errorf("order placed but could not extract order ID from response")
 		}
 		
 		return orderID, nil
@@ -1852,8 +1867,14 @@ func extractSKUFromURL(productURL string) string {
 			baseCode := strings.ToUpper(skuParts[len(skuParts)-2])
 			variantCode := strings.ToUpper(skuParts[len(skuParts)-1])
 			
-			// Add size code (000S000 is a common default size)
-			fullSKU := baseCode + "-" + variantCode + "000S000"
+			// Common size codes for Zalando
+			// Try multiple size variants - the API will select the available one
+			// 000S000 (Small), 000M000 (Medium), 000L000 (Large), 0000000 (One Size)
+			possibleSizes := []string{"000M000", "000L000", "000S000", "0000000"}
+			
+			// For now, use Medium as default (most common)
+			// In a real implementation, we would fetch the product page to get available sizes
+			fullSKU := baseCode + "-" + variantCode + possibleSizes[0]
 			return fullSKU
 		}
 	}
