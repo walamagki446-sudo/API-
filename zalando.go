@@ -771,7 +771,7 @@ func checkZalandoLogin(email, password string) (isValid bool, isSkipped bool, er
 		req.Header.Set("Sec-Ch-Ua", `"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"`)
 		req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
 		req.Header.Set("Sec-Ch-Ua-Platform", `"Windows"`)
-		req.Header.Set("x-csrf-token", csrfToken)
+		req.Header.Set("x-xsrf-token", csrfToken)
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -1345,7 +1345,7 @@ func loginAndGetClient(options HitOptions) (*http.Client, error) {
 	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Origin", "https://accounts.zalando.com")
 	req.Header.Set("Referer", "https://accounts.zalando.com/authenticate")
-	req.Header.Set("x-csrf-token", csrfToken)
+	req.Header.Set("x-xsrf-token", csrfToken)
 	
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1502,11 +1502,40 @@ func navigateToCheckout(client *http.Client, proxyURL string) error {
 	if err != nil {
 		return fmt.Errorf("failed to navigate to checkout: %w", err)
 	}
-	io.ReadAll(resp.Body)
+	bodyBytes, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
+	
+	// Try to extract CSRF token from HTML
+	body := string(bodyBytes)
+	csrfToken := extractCSRFFromHTML(body)
+	if csrfToken != "" {
+		addDebugLog("AUTOHIT", fmt.Sprintf("Extracted CSRF token from HTML: %s", csrfToken[:20]+"..."))
+	}
 	
 	addDebugLog("AUTOHIT", "Navigated to checkout")
 	return nil
+}
+
+func extractCSRFFromHTML(html string) string {
+	// Try to extract CSRF token from various patterns in HTML
+	patterns := []string{
+		`"csrfToken":"([^"]+)"`,
+		`"csrf_token":"([^"]+)"`,
+		`"xsrfToken":"([^"]+)"`,
+		`name="csrf-token" content="([^"]+)"`,
+		`data-csrf-token="([^"]+)"`,
+		`XSRF-TOKEN["\s:=]+([A-Za-z0-9+/=_-]+)`,
+	}
+	
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindStringSubmatch(html)
+		if len(matches) > 1 && matches[1] != "" {
+			return matches[1]
+		}
+	}
+	
+	return ""
 }
 
 func getCSRFToken(client *http.Client) string {
@@ -1514,7 +1543,9 @@ func getCSRFToken(client *http.Client) string {
 	zalandoURL, _ := url.Parse("https://www.zalando.se")
 	jar := client.Jar
 	for _, cookie := range jar.Cookies(zalandoURL) {
-		if cookie.Name == "x-csrf-token" || cookie.Name == "XSRF-TOKEN" || cookie.Name == "csrf-token" {
+		// Check various possible cookie names
+		cookieName := strings.ToLower(cookie.Name)
+		if strings.Contains(cookieName, "xsrf") || strings.Contains(cookieName, "csrf") {
 			return cookie.Value
 		}
 	}
@@ -1546,7 +1577,7 @@ func selectPickupPoint(client *http.Client, options HitOptions) error {
 	req.Header.Set("Origin", "https://www.zalando.se")
 	req.Header.Set("Referer", "https://www.zalando.se/checkout/address")
 	if csrfToken != "" {
-		req.Header.Set("x-csrf-token", csrfToken)
+		req.Header.Set("x-xsrf-token", csrfToken)
 	}
 	
 	resp, err := client.Do(req)
@@ -1592,7 +1623,7 @@ func selectPickupPoint(client *http.Client, options HitOptions) error {
 	req.Header.Set("Origin", "https://www.zalando.se")
 	req.Header.Set("Referer", "https://www.zalando.se/checkout/address")
 	if csrfToken != "" {
-		req.Header.Set("x-csrf-token", csrfToken)
+		req.Header.Set("x-xsrf-token", csrfToken)
 	}
 	
 	resp, err = client.Do(req)
@@ -1701,7 +1732,7 @@ func selectPickupPoint(client *http.Client, options HitOptions) error {
 	req.Header.Set("Origin", "https://www.zalando.se")
 	req.Header.Set("Referer", "https://www.zalando.se/checkout/address")
 	if csrfToken != "" {
-		req.Header.Set("x-csrf-token", csrfToken)
+		req.Header.Set("x-xsrf-token", csrfToken)
 	}
 	
 	resp, err = client.Do(req)
@@ -1830,7 +1861,7 @@ func completeOrder(client *http.Client, proxyURL string) (string, error) {
 	req.Header.Set("Origin", "https://www.zalando.se")
 	req.Header.Set("Referer", "https://www.zalando.se/checkout/payment")
 	if csrfToken != "" {
-		req.Header.Set("x-csrf-token", csrfToken)
+		req.Header.Set("x-xsrf-token", csrfToken)
 	}
 	
 	resp, err = client.Do(req)
