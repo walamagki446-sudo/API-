@@ -94,6 +94,7 @@ type HitOptions struct {
 	Email       string
 	Password    string
 	ProductURL  string
+	Size        string // Product size (S, M, L, XL, etc.)
 	BrowseMode  bool
 	ProxyURL    string
 	PhoneNumber string // Default: 0767541615
@@ -342,7 +343,7 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	addDebugLog("MESSAGE", fmt.Sprintf("User [%d] %s: %s", msg.From.ID, msg.From.UserName, msg.Text))
 
 	if msg.Command() == "start" {
-		welcomeMsg := "🎯 *Zalando Sweden Bot*\n\n📋 *Commands:*\n/check \\- Verify account\n/mass \\- Mass check\n/hit \\- Auto purchase \\(autohitter\\)\n/stop \\- Stop check\n/status \\- Real\\-time stats\n/proxies \\- Proxy info\n/debug \\- Download debug logs\n\n💡 *Examples:*\n```\n/check email@test\\.com:password\n/hit email:pass product\\_url\n/hit email:pass product\\_url browse\n```\n\n🔥 *Features:*\n• Elevated risk bypass\n• Auto purchase with Faktura\n• INSTABOX/BUDBEE pickup\n• Human\\-like behavior\n• Fast CPM\n• 🇸🇪 Target: Zalando Sweden\n\n⚡ *Optimized for Speed*"
+		welcomeMsg := "🎯 *Zalando Sweden Bot*\n\n📋 *Commands:*\n/check \\- Verify account\n/mass \\- Mass check\n/hit \\- Auto purchase \\(autohitter\\)\n/stop \\- Stop check\n/status \\- Real\\-time stats\n/proxies \\- Proxy info\n/debug \\- Download debug logs\n\n💡 *Examples:*\n```\n/check email@test\\.com:password\n/hit email:pass url M\n/hit email:pass url L browse\n/hit email:pass url XL browse 0701234567\n```\n\n🔥 *Features:*\n• Elevated risk bypass\n• Auto purchase with Faktura\n• Size selection \\(S, M, L, XL\\)\n• INSTABOX/BUDBEE pickup\n• Human\\-like behavior\n• Fast CPM\n• 🇸🇪 Target: Zalando Sweden\n\n⚡ *Optimized for Speed*"
 		sendMessage(bot, msg.Chat.ID, welcomeMsg, true)
 		return
 	}
@@ -553,13 +554,13 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	if msg.Command() == "hit" {
 		args := strings.TrimSpace(msg.CommandArguments())
 		if args == "" {
-			sendMessage(bot, msg.Chat.ID, "❌ Usage: /hit email:password product\\_url \\[browse\\] \\[phone\\]\n\nExample:\n`/hit test@mail\\.com:pass123 https://www\\.zalando\\.se/product browse 0767541615`", true)
+			sendMessage(bot, msg.Chat.ID, "❌ Usage: /hit email:password product\\_url size \\[browse\\] \\[phone\\]\n\nExample:\n`/hit test@mail\\.com:pass123 https://www\\.zalando\\.se/product M browse 0767541615`\n\nSizes: S, M, L, XL, XXL, or ONE\\_SIZE", true)
 			return
 		}
 		
 		parts := strings.Fields(args)
-		if len(parts) < 2 {
-			sendMessage(bot, msg.Chat.ID, "❌ Missing arguments\\. Need: email:password product\\_url", true)
+		if len(parts) < 3 {
+			sendMessage(bot, msg.Chat.ID, "❌ Missing arguments\\. Need: email:password product\\_url size\n\nExample: /hit email:pass url M", true)
 			return
 		}
 		
@@ -569,16 +570,28 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 			return
 		}
 		
+		size := strings.ToUpper(parts[2])
+		// Validate size
+		validSizes := map[string]bool{
+			"S": true, "M": true, "L": true, "XL": true, "XXL": true, "XXXL": true,
+			"ONE_SIZE": true, "ONESIZE": true, "ONE": true,
+		}
+		if !validSizes[size] {
+			sendMessage(bot, msg.Chat.ID, "❌ Invalid size\\. Valid sizes: S, M, L, XL, XXL, ONE\\_SIZE", true)
+			return
+		}
+		
 		options := HitOptions{
 			Email:       credParts[0],
 			Password:    credParts[1],
 			ProductURL:  parts[1],
+			Size:        size,
 			BrowseMode:  false,
 			PhoneNumber: "0767541615", // Default
 		}
 		
 		// Check for browse mode and phone number
-		for i := 2; i < len(parts); i++ {
+		for i := 3; i < len(parts); i++ {
 			if strings.ToLower(parts[i]) == "browse" {
 				options.BrowseMode = true
 			} else if len(parts[i]) >= 10 && strings.HasPrefix(parts[i], "0") {
@@ -590,7 +603,7 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 			options.ProxyURL = proxyManager.GetRandomProxy()
 		}
 		
-		addDebugLog("HIT", fmt.Sprintf("Starting autohit for %s on %s", options.Email, options.ProductURL))
+		addDebugLog("HIT", fmt.Sprintf("Starting autohit for %s on %s (size: %s)", options.Email, options.ProductURL, options.Size))
 		waitMsg := sendMessage(bot, msg.Chat.ID, "🎯 *Starting autohit*\\.\\.\\.\n\n⏳ This may take 1\\-2 minutes", true)
 		
 		go handleAutoHit(bot, msg.Chat.ID, waitMsg.MessageID, options)
@@ -1221,7 +1234,7 @@ func performAutoHit(options HitOptions) HitResult {
 	
 	// Step 3: Extract product SKU and add to cart
 	addDebugLog("AUTOHIT", "Step 3: Add product to cart")
-	err = addProductToCart(client, options.ProductURL, options.ProxyURL)
+	err = addProductToCart(client, options.ProductURL, options.Size, options.ProxyURL)
 	if err != nil {
 		addDebugLog("AUTOHIT-ERROR", fmt.Sprintf("Add to cart failed: %v", err))
 		return HitResult{Success: false, Error: err, Message: "Failed to add product to cart"}
@@ -1381,14 +1394,14 @@ func browseRandomProducts(client *http.Client, proxyURL string) {
 	time.Sleep(time.Duration(8000+rand.Intn(4000)) * time.Millisecond)
 }
 
-func addProductToCart(client *http.Client, productURL, proxyURL string) error {
+func addProductToCart(client *http.Client, productURL, size, proxyURL string) error {
 	// Extract SKU from URL
-	sku := extractSKUFromURL(productURL)
+	sku := extractSKUFromURL(productURL, size)
 	if sku == "" {
 		return fmt.Errorf("could not extract SKU from URL")
 	}
 	
-	addDebugLog("AUTOHIT", fmt.Sprintf("Adding product SKU: %s", sku))
+	addDebugLog("AUTOHIT", fmt.Sprintf("Adding product SKU: %s (size: %s)", sku, size))
 	
 	ua := userAgents[rand.Intn(len(userAgents))]
 	
@@ -1852,7 +1865,7 @@ func humanDelay(minMs, maxMs int) {
 	time.Sleep(delay)
 }
 
-func extractSKUFromURL(productURL string) string {
+func extractSKUFromURL(productURL, size string) string {
 	// Example URL: https://www.zalando.se/polo-ralph-lauren-the-gorham-glossed-down-jacket-dunjacka-black-po222t0fo-q11.html
 	// SKU format: PO222T0FO-Q11000S000 (uppercase with size code)
 	parts := strings.Split(productURL, "/")
@@ -1868,18 +1881,40 @@ func extractSKUFromURL(productURL string) string {
 			baseCode := strings.ToUpper(skuParts[len(skuParts)-2])
 			variantCode := strings.ToUpper(skuParts[len(skuParts)-1])
 			
-			// Common size codes for Zalando
-			// Try multiple size variants - the API will select the available one
-			// 000S000 (Small), 000M000 (Medium), 000L000 (Large), 0000000 (One Size)
-			possibleSizes := []string{"000M000", "000L000", "000S000", "0000000"}
+			// Map size to Zalando size code
+			sizeCode := getSizeCode(size)
 			
-			// For now, use Medium as default (most common)
-			// In a real implementation, we would fetch the product page to get available sizes
-			fullSKU := baseCode + "-" + variantCode + possibleSizes[0]
+			fullSKU := baseCode + "-" + variantCode + sizeCode
 			return fullSKU
 		}
 	}
 	return ""
+}
+
+func getSizeCode(size string) string {
+	// Convert user-friendly size to Zalando size code
+	sizeUpper := strings.ToUpper(size)
+	
+	sizeMap := map[string]string{
+		"XXS":       "000XXS",
+		"XS":        "000XS0",
+		"S":         "000S00",
+		"M":         "000M00",
+		"L":         "000L00",
+		"XL":        "000XL0",
+		"XXL":       "000XXL",
+		"XXXL":      "00XXXL",
+		"ONE_SIZE":  "000000",
+		"ONESIZE":   "000000",
+		"ONE":       "000000",
+	}
+	
+	if code, ok := sizeMap[sizeUpper]; ok {
+		return "0" + code
+	}
+	
+	// Default to Medium if unknown
+	return "000M000"
 }
 
 func extractOrderIDFromResponse(body string) string {

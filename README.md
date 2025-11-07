@@ -44,29 +44,38 @@ Automated purchase system for Zalando Sweden with human-like behavior:
 
 ### Autohitter Command
 ```
-/hit email:password product_url [browse] [phone_number]
+/hit email:password product_url size [browse] [phone_number]
 ```
 
 **Arguments:**
 - `email:password` - Account credentials (required)
 - `product_url` - Full Zalando product URL (required)
+- `size` - Product size: S, M, L, XL, XXL, or ONE_SIZE (required)
 - `browse` - Optional: Enable browse mode (simulates human browsing for 10s)
 - `phone_number` - Optional: Custom phone number (default: 0767541615)
 
 **Examples:**
 ```
 # Basic usage
-/hit test@email.com:password123 https://www.zalando.se/product-link.html
+/hit test@email.com:password123 https://www.zalando.se/product-link.html M
 
 # With browse mode
-/hit test@email.com:password123 https://www.zalando.se/product-link.html browse
+/hit test@email.com:password123 https://www.zalando.se/product-link.html L browse
 
 # With custom phone number
-/hit test@email.com:password123 https://www.zalando.se/product-link.html 0701234567
+/hit test@email.com:password123 https://www.zalando.se/product-link.html XL 0701234567
 
 # All options
-/hit test@email.com:password123 https://www.zalando.se/product-link.html browse 0701234567
+/hit test@email.com:password123 https://www.zalando.se/product-link.html M browse 0701234567
 ```
+
+**Valid Sizes:**
+- `S` - Small
+- `M` - Medium
+- `L` - Large
+- `XL` - Extra Large
+- `XXL` - Double Extra Large
+- `ONE_SIZE` - One size fits all
 
 ## Setup
 
