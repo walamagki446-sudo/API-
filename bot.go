@@ -89,7 +89,21 @@ func main() {
 
 	bot.Debug = false
 	log.Printf("[INFO] Bot started: @%s", bot.Self.UserName)
-	log.Printf("[INFO] Loaded %d subscriptions", len(storage.Subscriptions))
+	
+	// Count active subscriptions only
+	activeCount := 0
+	for _, sub := range storage.Subscriptions {
+		if sub.Active {
+			activeCount++
+		}
+	}
+	log.Printf("[INFO] Loaded %d total subscriptions (%d active, %d inactive)", 
+		len(storage.Subscriptions), activeCount, len(storage.Subscriptions)-activeCount)
+
+	// Check and update all active subscriptions on startup to catch any missed days
+	log.Println("[INFO] Checking subscriptions for missed updates...")
+	checkExpiredSubscriptions(bot)
+	log.Println("[INFO] Startup subscription check complete")
 
 	// Start expiry checker in background
 	go expiryChecker(bot)
@@ -139,10 +153,17 @@ func (s *Storage) Save() error {
 	s.mu.RUnlock()
 	
 	if err != nil {
+		log.Printf("[ERROR] Failed to marshal subscriptions: %v", err)
 		return err
 	}
 
-	return os.WriteFile(s.filename, data, 0644)
+	err = os.WriteFile(s.filename, data, 0644)
+	if err != nil {
+		log.Printf("[ERROR] Failed to write subscriptions to file: %v", err)
+		return err
+	}
+	
+	return nil
 }
 
 func (s *Storage) GetKey(userID int64, ip string) string {
@@ -579,20 +600,43 @@ func expiryChecker(bot *tgbotapi.BotAPI) {
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
 
-	log.Println("[INFO] Expiry checker started (runs every 1 hour)")
+	// Also create a backup ticker every 6 hours
+	backupTicker := time.NewTicker(6 * time.Hour)
+	defer backupTicker.Stop()
 
-	for range ticker.C {
-		checkExpiredSubscriptions(bot)
+	log.Println("[INFO] Expiry checker started (runs every 1 hour)")
+	log.Println("[INFO] Backup saver started (runs every 6 hours)")
+
+	for {
+		select {
+		case <-ticker.C:
+			checkExpiredSubscriptions(bot)
+		case <-backupTicker.C:
+			// Force save all subscriptions as backup
+			if err := storage.Save(); err != nil {
+				log.Printf("[ERROR] Backup save failed: %v", err)
+			} else {
+				log.Println("[INFO] Backup save completed successfully")
+			}
+		}
 	}
 }
 
 func checkExpiredSubscriptions(bot *tgbotapi.BotAPI) {
 	subs := storage.GetAllActiveSubscriptions()
 	now := time.Now()
+	
+	if len(subs) == 0 {
+		log.Println("[INFO] No active subscriptions to check")
+		return
+	}
+	
+	log.Printf("[INFO] Checking %d active subscriptions for expiry", len(subs))
 
 	for _, sub := range subs {
 		// Skip paused subscriptions
 		if sub.IsPaused {
+			log.Printf("[INFO] Skipping paused subscription: @%s", sub.Username)
 			continue
 		}
 
@@ -620,6 +664,8 @@ func checkExpiredSubscriptions(bot *tgbotapi.BotAPI) {
 				if err == nil {
 					kickSuccess = true
 					log.Printf("[KICK] Kicked expired user %d from group", sub.UserID)
+				} else {
+					log.Printf("[ERROR] Failed to kick user %d: %v", sub.UserID, err)
 				}
 			}
 
@@ -637,6 +683,8 @@ func checkExpiredSubscriptions(bot *tgbotapi.BotAPI) {
 			}
 		}
 	}
+	
+	log.Println("[INFO] Expiry check completed")
 }
 
 func updateDaysRemaining(sub *Subscription) {
@@ -646,7 +694,16 @@ func updateDaysRemaining(sub *Subscription) {
 
 	now := time.Now()
 	elapsed := now.Sub(sub.LastChecked)
+	
+	// Calculate days passed with precision - use 24 hours exactly
 	daysPassed := int(elapsed.Hours() / 24)
+	
+	// Safety check: if more than 30 days have passed since last check, 
+	// something is wrong - log a warning but still process
+	if daysPassed > 30 {
+		log.Printf("[WARNING] Large time gap detected for @%s: %d days since last check", 
+			sub.Username, daysPassed)
+	}
 
 	if daysPassed > 0 {
 		sub.DaysRemaining -= daysPassed
@@ -654,7 +711,12 @@ func updateDaysRemaining(sub *Subscription) {
 			sub.DaysRemaining = 0
 		}
 		sub.LastChecked = now
+		
+		// Always save to disk after updating
 		storage.UpdateSubscription(sub)
+		
+		log.Printf("[UPDATE] @%s: %d days passed, %d days remaining", 
+			sub.Username, daysPassed, sub.DaysRemaining)
 	}
 }
 
