@@ -40,3 +40,12 @@ Thumbs.db
 *.tmp
 debug_*.txt
 zalando_*.txt
+
+# Old files
+*.old
+*.bak
+
+# HTML captures and JSON data
+*.html
+captured-apis-*.json
+rendered_*.html

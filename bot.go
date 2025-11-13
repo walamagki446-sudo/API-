@@ -135,9 +135,9 @@ func (s *Storage) Load() error {
 
 func (s *Storage) Save() error {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	data, err := json.MarshalIndent(s.Subscriptions, "", "  ")
+	s.mu.RUnlock()
+	
 	if err != nil {
 		return err
 	}
@@ -151,10 +151,9 @@ func (s *Storage) GetKey(userID int64, ip string) string {
 
 func (s *Storage) AddSubscription(sub *Subscription) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	key := s.GetKey(sub.UserID, sub.IP)
 	s.Subscriptions[key] = sub
+	s.mu.Unlock()
 	s.Save()
 }
 
@@ -168,19 +167,17 @@ func (s *Storage) GetSubscription(userID int64, ip string) *Subscription {
 
 func (s *Storage) RemoveSubscription(userID int64, ip string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	key := s.GetKey(userID, ip)
 	delete(s.Subscriptions, key)
+	s.mu.Unlock()
 	s.Save()
 }
 
 func (s *Storage) UpdateSubscription(sub *Subscription) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	key := s.GetKey(sub.UserID, sub.IP)
 	s.Subscriptions[key] = sub
+	s.mu.Unlock()
 	s.Save()
 }
 
