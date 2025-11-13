@@ -3,6 +3,7 @@
 
 # Subscription data
 subscriptions.json
+test_*.json
 
 # Go build artifacts
 *.exe
