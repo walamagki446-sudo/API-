@@ -247,6 +247,8 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 		handleList(bot, msg)
 	case "status":
 		handleStatus(bot, msg)
+	case "debug":
+		handleDebug(bot, msg)
 	default:
 		if msg.Command() != "" {
 			sendMessage(bot, msg.Chat.ID, "Unknown command. Use /start for help.", false)
@@ -265,6 +267,7 @@ func handleStart(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 /resume @userid IP \- Resume subscription
 /list \- List all subscriptions
 /status @userid IP \- Check subscription status
+/debug \- Show debug information
 
 *Examples:*
 ` + "```" + `
@@ -327,6 +330,9 @@ func handleAuth(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	}
 
 	storage.AddSubscription(sub)
+	
+	log.Printf("[AUTH] Created subscription: @%s (ID: %d, IP: %s, Days: %d, Active: %v)", 
+		username, userID, ip, days, sub.Active)
 
 	// Send confirmation
 	confirmMsg := fmt.Sprintf("*User Authorized*\n\nUser: @%s\nID: `%d`\nIP: `%s`\nDays: `%d`\nExpires: `%s`",
@@ -516,6 +522,8 @@ func handleResume(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 
 func handleList(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	subs := storage.GetAllActiveSubscriptions()
+	
+	log.Printf("[INFO] /list command called, found %d active subscriptions", len(subs))
 
 	if len(subs) == 0 {
 		sendMessage(bot, msg.Chat.ID, "No active subscriptions found.", false)
@@ -548,6 +556,7 @@ func handleList(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	}
 
 	sendMessage(bot, msg.Chat.ID, sb.String(), true)
+	log.Printf("[INFO] /list response sent with %d subscriptions", len(subs))
 }
 
 func handleStatus(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
@@ -597,6 +606,32 @@ func handleStatus(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	statusMsg.WriteString(fmt.Sprintf("Started: `%s`\n", escapeMarkdownV2(sub.StartDate.Format("2006-01-02 15:04"))))
 
 	sendMessage(bot, msg.Chat.ID, statusMsg.String(), true)
+}
+
+func handleDebug(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
+	storage.mu.RLock()
+	defer storage.mu.RUnlock()
+	
+	var debugMsg strings.Builder
+	debugMsg.WriteString("*Debug Information*\n\n")
+	debugMsg.WriteString(fmt.Sprintf("Total subscriptions: `%d`\n\n", len(storage.Subscriptions)))
+	
+	if len(storage.Subscriptions) == 0 {
+		debugMsg.WriteString("No subscriptions in storage\\.\n")
+	} else {
+		debugMsg.WriteString("*All Subscriptions:*\n")
+		for key, sub := range storage.Subscriptions {
+			debugMsg.WriteString(fmt.Sprintf("\nKey: `%s`\n", escapeMarkdownV2(key)))
+			debugMsg.WriteString(fmt.Sprintf("  User: @%s \\(ID: %d\\)\n", escapeMarkdownV2(sub.Username), sub.UserID))
+			debugMsg.WriteString(fmt.Sprintf("  IP: `%s`\n", escapeMarkdownV2(sub.IP)))
+			debugMsg.WriteString(fmt.Sprintf("  Active: `%v`\n", sub.Active))
+			debugMsg.WriteString(fmt.Sprintf("  Paused: `%v`\n", sub.IsPaused))
+			debugMsg.WriteString(fmt.Sprintf("  Days: `%d/%d`\n", sub.DaysRemaining, sub.TotalDays))
+		}
+	}
+	
+	sendMessage(bot, msg.Chat.ID, debugMsg.String(), true)
+	log.Printf("[DEBUG] Debug info sent to admin %d", msg.From.ID)
 }
 
 // ====================================
@@ -676,17 +711,27 @@ func checkExpiredSubscriptions(bot *tgbotapi.BotAPI) {
 				}
 			}
 
+			// Prepare expiry message
+			expiryMsg := fmt.Sprintf("*SUBSCRIPTION EXPIRED*\n\n@%s\n`%d`\n`%s`\nExpired: `%s`\nKicked: %v",
+				escapeMarkdownV2(sub.Username), sub.UserID, escapeMarkdownV2(sub.IP),
+				escapeMarkdownV2(now.Format("2006-01-02 15:04")), kickSuccess)
+
 			// Send expiry notification to log channel (TWICE with warning)
 			if config.LogChatID != 0 {
-				expiryMsg := fmt.Sprintf("*SUBSCRIPTION EXPIRED*\n\n@%s\n`%d`\n`%s`\nExpired: `%s`\nKicked: %v",
-					escapeMarkdownV2(sub.Username), sub.UserID, escapeMarkdownV2(sub.IP),
-					escapeMarkdownV2(now.Format("2006-01-02 15:04")), kickSuccess)
-
 				// Send first notification
 				sendMessage(bot, config.LogChatID, expiryMsg, true)
 				time.Sleep(2 * time.Second)
 				// Send second notification (as requested)
 				sendMessage(bot, config.LogChatID, expiryMsg, true)
+				log.Printf("[INFO] Expiry notification sent to log channel for @%s", sub.Username)
+			}
+			
+			// Also notify all admins directly about the expiry
+			if len(config.AdminIDs) > 0 {
+				for _, adminID := range config.AdminIDs {
+					sendMessage(bot, adminID, expiryMsg, true)
+					log.Printf("[INFO] Expiry notification sent to admin %d", adminID)
+				}
 			}
 		}
 	}
