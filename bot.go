@@ -61,7 +61,7 @@ func main() {
 	// Load environment variables
 	err := godotenv.Load()
 	if err != nil {
-		log.Println("⚠️ .env file not found, using environment variables")
+		log.Println("[WARNING] .env file not found, using environment variables")
 	}
 
 	config = Config{
@@ -72,24 +72,24 @@ func main() {
 	}
 
 	if config.TelegramToken == "" {
-		log.Fatal("❌ TELEGRAM_BOT_TOKEN not set!")
+		log.Fatal("[ERROR] TELEGRAM_BOT_TOKEN not set!")
 	}
 
 	// Initialize storage
 	storage = NewStorage("subscriptions.json")
 	if err := storage.Load(); err != nil {
-		log.Printf("⚠️ Could not load existing subscriptions: %v", err)
+		log.Printf("[WARNING] Could not load existing subscriptions: %v", err)
 	}
 
 	// Create bot
 	bot, err := tgbotapi.NewBotAPI(config.TelegramToken)
 	if err != nil {
-		log.Fatal("❌ Bot startup error:", err)
+		log.Fatal("[ERROR] Bot startup error:", err)
 	}
 
 	bot.Debug = false
-	log.Printf("✅ Bot started: @%s", bot.Self.UserName)
-	log.Printf("📊 Loaded %d subscriptions", len(storage.Subscriptions))
+	log.Printf("[INFO] Bot started: @%s", bot.Self.UserName)
+	log.Printf("[INFO] Loaded %d subscriptions", len(storage.Subscriptions))
 
 	// Start expiry checker in background
 	go expiryChecker(bot)
@@ -221,15 +221,15 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 		handleStatus(bot, msg)
 	default:
 		if msg.Command() != "" {
-			sendMessage(bot, msg.Chat.ID, "❓ Unknown command. Use /start for help.", false)
+			sendMessage(bot, msg.Chat.ID, "Unknown command. Use /start for help.", false)
 		}
 	}
 }
 
 func handleStart(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
-	helpText := `🎯 *Subscription Management Bot*
+	helpText := `*Subscription Management Bot*
 
-📋 *Commands:*
+*Commands:*
 
 /auth @userid IP days \- Authorize user
 /deauth @userid IP \- Deauthorize user
@@ -238,7 +238,7 @@ func handleStart(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 /list \- List all subscriptions
 /status @userid IP \- Check subscription status
 
-💡 *Examples:*
+*Examples:*
 ` + "```" + `
 /auth @john 192.168.1.1 30
 /deauth @john 192.168.1.1
@@ -246,13 +246,13 @@ func handleStart(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 /resume @john 192.168.1.1
 ` + "```" + `
 
-⚡ *Features:*
+*Features:*
 • Pause/Resume with accurate day tracking
 • Auto\-kick on deauth
 • Comprehensive logging
 • Expiry notifications
 
-🔧 *Setup Required:*
+*Setup Required:*
 Set GROUP\_CHAT\_ID and LOG\_CHAT\_ID in \.env`
 
 	sendMessage(bot, msg.Chat.ID, helpText, true)
@@ -262,7 +262,7 @@ func handleAuth(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	// Parse: /auth @userid IP days
 	args := strings.Fields(msg.CommandArguments())
 	if len(args) != 3 {
-		sendMessage(bot, msg.Chat.ID, "❌ Usage: /auth @userid IP days\nExample: /auth @john 192.168.1.1 30", false)
+		sendMessage(bot, msg.Chat.ID, "Usage: /auth @userid IP days\nExample: /auth @john 192.168.1.1 30", false)
 		return
 	}
 
@@ -270,7 +270,7 @@ func handleAuth(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	ip := args[1]
 	days, err := strconv.Atoi(args[2])
 	if err != nil || days <= 0 {
-		sendMessage(bot, msg.Chat.ID, "❌ Invalid days! Must be a positive number.", false)
+		sendMessage(bot, msg.Chat.ID, "Invalid days! Must be a positive number.", false)
 		return
 	}
 
@@ -281,7 +281,7 @@ func handleAuth(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	// Check if subscription already exists
 	existing := storage.GetSubscription(userID, ip)
 	if existing != nil && existing.Active {
-		sendMessage(bot, msg.Chat.ID, fmt.Sprintf("⚠️ User @%s with IP %s already has an active subscription!", username, ip), false)
+		sendMessage(bot, msg.Chat.ID, fmt.Sprintf("[WARNING] User @%s with IP %s already has an active subscription!", username, ip), false)
 		return
 	}
 
@@ -301,26 +301,26 @@ func handleAuth(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	storage.AddSubscription(sub)
 
 	// Send confirmation
-	confirmMsg := fmt.Sprintf("✅ *User Authorized*\n\n👤 User: @%s\n🆔 ID: `%d`\n🌐 IP: `%s`\n📅 Days: `%d`\n⏰ Expires: `%s`",
+	confirmMsg := fmt.Sprintf("*User Authorized*\n\nUser: @%s\nID: `%d`\nIP: `%s`\nDays: `%d`\nExpires: `%s`",
 		username, userID, ip, days, time.Now().Add(time.Duration(days)*24*time.Hour).Format("2006-01-02 15:04"))
 	sendMessage(bot, msg.Chat.ID, confirmMsg, true)
 
 	// Log to log channel
 	if config.LogChatID != 0 {
-		logMsg := fmt.Sprintf("✅ *AUTH*\n\n👤 @%s \\(`%d`\\)\n🌐 `%s`\n📅 %d days\n⏰ %s",
+		logMsg := fmt.Sprintf("*AUTH*\n\n@%s \\(`%d`\\)\n`%s`\n%d days\n%s",
 			escapeMarkdownV2(username), userID, escapeMarkdownV2(ip), days,
 			escapeMarkdownV2(time.Now().Format("2006-01-02 15:04")))
 		sendMessage(bot, config.LogChatID, logMsg, true)
 	}
 
-	log.Printf("✅ AUTH: @%s (ID: %d, IP: %s, Days: %d)", username, userID, ip, days)
+	log.Printf("[AUTH] @%s (ID: %d, IP: %s, Days: %d)", username, userID, ip, days)
 }
 
 func handleDeauth(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	// Parse: /deauth @userid IP
 	args := strings.Fields(msg.CommandArguments())
 	if len(args) != 2 {
-		sendMessage(bot, msg.Chat.ID, "❌ Usage: /deauth @userid IP\nExample: /deauth @john 192.168.1.1", false)
+		sendMessage(bot, msg.Chat.ID, "Usage: /deauth @userid IP\nExample: /deauth @john 192.168.1.1", false)
 		return
 	}
 
@@ -331,7 +331,7 @@ func handleDeauth(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	// Check if subscription exists
 	sub := storage.GetSubscription(userID, ip)
 	if sub == nil || !sub.Active {
-		sendMessage(bot, msg.Chat.ID, fmt.Sprintf("❌ No active subscription found for @%s with IP %s", username, ip), false)
+		sendMessage(bot, msg.Chat.ID, fmt.Sprintf("No active subscription found for @%s with IP %s", username, ip), false)
 		return
 	}
 
@@ -351,20 +351,20 @@ func handleDeauth(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 		_, err := bot.Request(kickConfig)
 		if err == nil {
 			kickSuccess = true
-			log.Printf("👢 Kicked user %d from group", userID)
+			log.Printf("[KICK] Kicked user %d from group", userID)
 		} else {
-			log.Printf("⚠️ Failed to kick user %d: %v", userID, err)
+			log.Printf("[WARNING] Failed to kick user %d: %v", userID, err)
 		}
 	}
 
 	// Send confirmation with kick status
 	var confirmMsg string
 	if kickSuccess {
-		confirmMsg = fmt.Sprintf("⚠️ *Unauthorized and kicked @%s \\(%d\\) successfully\\.*\n\n🌐 IP: `%s`\n⏰ %s",
+		confirmMsg = fmt.Sprintf("*Unauthorized and kicked @%s \\(%d\\) successfully\\.*\n\nIP: `%s`\n%s",
 			escapeMarkdownV2(username), userID, escapeMarkdownV2(ip),
 			escapeMarkdownV2(time.Now().Format("2006-01-02 15:04")))
 	} else {
-		confirmMsg = fmt.Sprintf("⚠️ *User Deauthorized*\n\n👤 @%s \\(`%d`\\)\n🌐 `%s`\n⏰ %s",
+		confirmMsg = fmt.Sprintf("*User Deauthorized*\n\n@%s \\(`%d`\\)\n`%s`\n%s",
 			escapeMarkdownV2(username), userID, escapeMarkdownV2(ip),
 			escapeMarkdownV2(time.Now().Format("2006-01-02 15:04")))
 	}
@@ -372,27 +372,27 @@ func handleDeauth(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 
 	// Send kick message to group if kicked
 	if kickSuccess && config.GroupChatID != 0 {
-		groupMsg := fmt.Sprintf("⚠️ Unauthorized and kicked @%s \\(%d\\) successfully\\.",
+		groupMsg := fmt.Sprintf("Unauthorized and kicked @%s \\(%d\\) successfully\\.",
 			escapeMarkdownV2(username), userID)
 		sendMessage(bot, config.GroupChatID, groupMsg, true)
 	}
 
 	// Log to log channel
 	if config.LogChatID != 0 {
-		logMsg := fmt.Sprintf("⚠️ *DEAUTH*\n\n👤 @%s \\(`%d`\\)\n🌐 `%s`\n👢 Kicked: %v\n⏰ %s",
+		logMsg := fmt.Sprintf("*DEAUTH*\n\n@%s \\(`%d`\\)\n`%s`\nKicked: %v\n%s",
 			escapeMarkdownV2(username), userID, escapeMarkdownV2(ip), kickSuccess,
 			escapeMarkdownV2(time.Now().Format("2006-01-02 15:04")))
 		sendMessage(bot, config.LogChatID, logMsg, true)
 	}
 
-	log.Printf("⚠️ DEAUTH: @%s (ID: %d, IP: %s, Kicked: %v)", username, userID, ip, kickSuccess)
+	log.Printf("[DEAUTH] @%s (ID: %d, IP: %s, Kicked: %v)", username, userID, ip, kickSuccess)
 }
 
 func handlePause(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	// Parse: /pause @userid IP
 	args := strings.Fields(msg.CommandArguments())
 	if len(args) != 2 {
-		sendMessage(bot, msg.Chat.ID, "❌ Usage: /pause @userid IP\nExample: /pause @john 192.168.1.1", false)
+		sendMessage(bot, msg.Chat.ID, "Usage: /pause @userid IP\nExample: /pause @john 192.168.1.1", false)
 		return
 	}
 
@@ -403,12 +403,12 @@ func handlePause(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	// Get subscription
 	sub := storage.GetSubscription(userID, ip)
 	if sub == nil || !sub.Active {
-		sendMessage(bot, msg.Chat.ID, fmt.Sprintf("❌ No active subscription found for @%s with IP %s", username, ip), false)
+		sendMessage(bot, msg.Chat.ID, fmt.Sprintf("No active subscription found for @%s with IP %s", username, ip), false)
 		return
 	}
 
 	if sub.IsPaused {
-		sendMessage(bot, msg.Chat.ID, fmt.Sprintf("⚠️ Subscription for @%s is already paused!", username), false)
+		sendMessage(bot, msg.Chat.ID, fmt.Sprintf("[WARNING] Subscription for @%s is already paused!", username), false)
 		return
 	}
 
@@ -422,27 +422,27 @@ func handlePause(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	storage.UpdateSubscription(sub)
 
 	// Send confirmation
-	confirmMsg := fmt.Sprintf("⏸️ *Subscription Paused*\n\n👤 @%s \\(`%d`\\)\n🌐 `%s`\n📅 Days left: `%d`\n⏰ %s",
+	confirmMsg := fmt.Sprintf("*Subscription Paused*\n\n@%s \\(`%d`\\)\n`%s`\nDays left: `%d`\n%s",
 		escapeMarkdownV2(username), userID, escapeMarkdownV2(ip), sub.DaysRemaining,
 		escapeMarkdownV2(time.Now().Format("2006-01-02 15:04")))
 	sendMessage(bot, msg.Chat.ID, confirmMsg, true)
 
 	// Log to log channel
 	if config.LogChatID != 0 {
-		logMsg := fmt.Sprintf("⏸️ *PAUSE*\n\n👤 @%s \\(`%d`\\)\n🌐 `%s`\n📅 Days left: `%d`\n⏰ %s",
+		logMsg := fmt.Sprintf("*PAUSE*\n\n@%s \\(`%d`\\)\n`%s`\nDays left: `%d`\n%s",
 			escapeMarkdownV2(username), userID, escapeMarkdownV2(ip), sub.DaysRemaining,
 			escapeMarkdownV2(time.Now().Format("2006-01-02 15:04")))
 		sendMessage(bot, config.LogChatID, logMsg, true)
 	}
 
-	log.Printf("⏸️ PAUSE: @%s (ID: %d, IP: %s, Days left: %d)", username, userID, ip, sub.DaysRemaining)
+	log.Printf("[PAUSE] @%s (ID: %d, IP: %s, Days left: %d)", username, userID, ip, sub.DaysRemaining)
 }
 
 func handleResume(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	// Parse: /resume @userid IP
 	args := strings.Fields(msg.CommandArguments())
 	if len(args) != 2 {
-		sendMessage(bot, msg.Chat.ID, "❌ Usage: /resume @userid IP\nExample: /resume @john 192.168.1.1", false)
+		sendMessage(bot, msg.Chat.ID, "Usage: /resume @userid IP\nExample: /resume @john 192.168.1.1", false)
 		return
 	}
 
@@ -453,12 +453,12 @@ func handleResume(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	// Get subscription
 	sub := storage.GetSubscription(userID, ip)
 	if sub == nil || !sub.Active {
-		sendMessage(bot, msg.Chat.ID, fmt.Sprintf("❌ No active subscription found for @%s with IP %s", username, ip), false)
+		sendMessage(bot, msg.Chat.ID, fmt.Sprintf("No active subscription found for @%s with IP %s", username, ip), false)
 		return
 	}
 
 	if !sub.IsPaused {
-		sendMessage(bot, msg.Chat.ID, fmt.Sprintf("⚠️ Subscription for @%s is not paused!", username), false)
+		sendMessage(bot, msg.Chat.ID, fmt.Sprintf("[WARNING] Subscription for @%s is not paused!", username), false)
 		return
 	}
 
@@ -470,51 +470,51 @@ func handleResume(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 
 	// Send confirmation
 	expiryDate := time.Now().Add(time.Duration(sub.DaysRemaining) * 24 * time.Hour)
-	confirmMsg := fmt.Sprintf("▶️ *Subscription Resumed*\n\n👤 @%s \\(`%d`\\)\n🌐 `%s`\n📅 Days left: `%d`\n⏰ Will expire: `%s`",
+	confirmMsg := fmt.Sprintf("*Subscription Resumed*\n\n@%s \\(`%d`\\)\n`%s`\nDays left: `%d`\nWill expire: `%s`",
 		escapeMarkdownV2(username), userID, escapeMarkdownV2(ip), sub.DaysRemaining,
 		escapeMarkdownV2(expiryDate.Format("2006-01-02 15:04")))
 	sendMessage(bot, msg.Chat.ID, confirmMsg, true)
 
 	// Log to log channel
 	if config.LogChatID != 0 {
-		logMsg := fmt.Sprintf("▶️ *RESUME*\n\n👤 @%s \\(`%d`\\)\n🌐 `%s`\n📅 Days left: `%d`\n⏰ Will expire: `%s`",
+		logMsg := fmt.Sprintf("*RESUME*\n\n@%s \\(`%d`\\)\n`%s`\nDays left: `%d`\nWill expire: `%s`",
 			escapeMarkdownV2(username), userID, escapeMarkdownV2(ip), sub.DaysRemaining,
 			escapeMarkdownV2(expiryDate.Format("2006-01-02 15:04")))
 		sendMessage(bot, config.LogChatID, logMsg, true)
 	}
 
-	log.Printf("▶️ RESUME: @%s (ID: %d, IP: %s, Days left: %d)", username, userID, ip, sub.DaysRemaining)
+	log.Printf("[RESUME] @%s (ID: %d, IP: %s, Days left: %d)", username, userID, ip, sub.DaysRemaining)
 }
 
 func handleList(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	subs := storage.GetAllActiveSubscriptions()
 
 	if len(subs) == 0 {
-		sendMessage(bot, msg.Chat.ID, "📋 No active subscriptions found.", false)
+		sendMessage(bot, msg.Chat.ID, "No active subscriptions found.", false)
 		return
 	}
 
 	var sb strings.Builder
-	sb.WriteString("📋 *Active Subscriptions*\n\n")
+	sb.WriteString("*Active Subscriptions*\n\n")
 
 	for i, sub := range subs {
 		// Update days remaining
 		updateDaysRemaining(sub)
 
-		status := "✅ Active"
+		status := "Active"
 		if sub.IsPaused {
-			status = "⏸️ Paused"
+			status = "Paused"
 		}
 
 		sb.WriteString(fmt.Sprintf("%d\\. @%s\n", i+1, escapeMarkdownV2(sub.Username)))
-		sb.WriteString(fmt.Sprintf("   🆔 `%d`\n", sub.UserID))
-		sb.WriteString(fmt.Sprintf("   🌐 `%s`\n", escapeMarkdownV2(sub.IP)))
-		sb.WriteString(fmt.Sprintf("   📅 Days: `%d/%d`\n", sub.DaysRemaining, sub.TotalDays))
-		sb.WriteString(fmt.Sprintf("   📊 %s\n", status))
+		sb.WriteString(fmt.Sprintf("   ID: `%d`\n", sub.UserID))
+		sb.WriteString(fmt.Sprintf("   IP: `%s`\n", escapeMarkdownV2(sub.IP)))
+		sb.WriteString(fmt.Sprintf("   Days: `%d/%d`\n", sub.DaysRemaining, sub.TotalDays))
+		sb.WriteString(fmt.Sprintf("   Status: %s\n", status))
 
 		if !sub.IsPaused {
 			expiryDate := sub.LastChecked.Add(time.Duration(sub.DaysRemaining) * 24 * time.Hour)
-			sb.WriteString(fmt.Sprintf("   ⏰ Expires: `%s`\n", escapeMarkdownV2(expiryDate.Format("2006-01-02"))))
+			sb.WriteString(fmt.Sprintf("   Expires: `%s`\n", escapeMarkdownV2(expiryDate.Format("2006-01-02"))))
 		}
 		sb.WriteString("\n")
 	}
@@ -526,7 +526,7 @@ func handleStatus(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	// Parse: /status @userid IP
 	args := strings.Fields(msg.CommandArguments())
 	if len(args) != 2 {
-		sendMessage(bot, msg.Chat.ID, "❌ Usage: /status @userid IP\nExample: /status @john 192.168.1.1", false)
+		sendMessage(bot, msg.Chat.ID, "Usage: /status @userid IP\nExample: /status @john 192.168.1.1", false)
 		return
 	}
 
@@ -537,7 +537,7 @@ func handleStatus(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	// Get subscription
 	sub := storage.GetSubscription(userID, ip)
 	if sub == nil {
-		sendMessage(bot, msg.Chat.ID, fmt.Sprintf("❌ No subscription found for @%s with IP %s", username, ip), false)
+		sendMessage(bot, msg.Chat.ID, fmt.Sprintf("No subscription found for @%s with IP %s", username, ip), false)
 		return
 	}
 
@@ -547,26 +547,26 @@ func handleStatus(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	}
 
 	var statusMsg strings.Builder
-	statusMsg.WriteString("📊 *Subscription Status*\n\n")
-	statusMsg.WriteString(fmt.Sprintf("👤 User: @%s\n", escapeMarkdownV2(sub.Username)))
-	statusMsg.WriteString(fmt.Sprintf("🆔 ID: `%d`\n", sub.UserID))
-	statusMsg.WriteString(fmt.Sprintf("🌐 IP: `%s`\n", escapeMarkdownV2(sub.IP)))
-	statusMsg.WriteString(fmt.Sprintf("📅 Days: `%d/%d`\n", sub.DaysRemaining, sub.TotalDays))
+	statusMsg.WriteString("*Subscription Status*\n\n")
+	statusMsg.WriteString(fmt.Sprintf("User: @%s\n", escapeMarkdownV2(sub.Username)))
+	statusMsg.WriteString(fmt.Sprintf("ID: `%d`\n", sub.UserID))
+	statusMsg.WriteString(fmt.Sprintf("IP: `%s`\n", escapeMarkdownV2(sub.IP)))
+	statusMsg.WriteString(fmt.Sprintf("Days: `%d/%d`\n", sub.DaysRemaining, sub.TotalDays))
 
 	if sub.Active {
 		if sub.IsPaused {
-			statusMsg.WriteString("📊 Status: ⏸️ Paused\n")
-			statusMsg.WriteString(fmt.Sprintf("⏸️ Paused on: `%s`\n", escapeMarkdownV2(sub.PausedAt.Format("2006-01-02 15:04"))))
+			statusMsg.WriteString("Status: Paused\n")
+			statusMsg.WriteString(fmt.Sprintf("Paused on: `%s`\n", escapeMarkdownV2(sub.PausedAt.Format("2006-01-02 15:04"))))
 		} else {
-			statusMsg.WriteString("📊 Status: ✅ Active\n")
+			statusMsg.WriteString("Status: Active\n")
 			expiryDate := sub.LastChecked.Add(time.Duration(sub.DaysRemaining) * 24 * time.Hour)
-			statusMsg.WriteString(fmt.Sprintf("⏰ Expires: `%s`\n", escapeMarkdownV2(expiryDate.Format("2006-01-02 15:04"))))
+			statusMsg.WriteString(fmt.Sprintf("Expires: `%s`\n", escapeMarkdownV2(expiryDate.Format("2006-01-02 15:04"))))
 		}
 	} else {
-		statusMsg.WriteString("📊 Status: ❌ Deactivated\n")
+		statusMsg.WriteString("Status: Deactivated\n")
 	}
 
-	statusMsg.WriteString(fmt.Sprintf("📅 Started: `%s`\n", escapeMarkdownV2(sub.StartDate.Format("2006-01-02 15:04"))))
+	statusMsg.WriteString(fmt.Sprintf("Started: `%s`\n", escapeMarkdownV2(sub.StartDate.Format("2006-01-02 15:04"))))
 
 	sendMessage(bot, msg.Chat.ID, statusMsg.String(), true)
 }
@@ -579,7 +579,7 @@ func expiryChecker(bot *tgbotapi.BotAPI) {
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
 
-	log.Println("🕐 Expiry checker started (runs every 1 hour)")
+	log.Println("[INFO] Expiry checker started (runs every 1 hour)")
 
 	for range ticker.C {
 		checkExpiredSubscriptions(bot)
@@ -601,7 +601,7 @@ func checkExpiredSubscriptions(bot *tgbotapi.BotAPI) {
 
 		// Check if expired
 		if sub.DaysRemaining <= 0 {
-			log.Printf("⏰ Subscription expired: @%s (ID: %d, IP: %s)", sub.Username, sub.UserID, sub.IP)
+			log.Printf("[EXPIRY] Subscription expired: @%s (ID: %d, IP: %s)", sub.Username, sub.UserID, sub.IP)
 
 			// Deactivate subscription
 			sub.Active = false
@@ -619,13 +619,13 @@ func checkExpiredSubscriptions(bot *tgbotapi.BotAPI) {
 				_, err := bot.Request(kickConfig)
 				if err == nil {
 					kickSuccess = true
-					log.Printf("👢 Kicked expired user %d from group", sub.UserID)
+					log.Printf("[KICK] Kicked expired user %d from group", sub.UserID)
 				}
 			}
 
 			// Send expiry notification to log channel (TWICE with warning)
 			if config.LogChatID != 0 {
-				expiryMsg := fmt.Sprintf("⚠️ *SUBSCRIPTION EXPIRED* ⚠️\n\n👤 @%s\n🆔 `%d`\n🌐 `%s`\n⏰ Expired: `%s`\n👢 Kicked: %v",
+				expiryMsg := fmt.Sprintf("*SUBSCRIPTION EXPIRED*\n\n@%s\n`%d`\n`%s`\nExpired: `%s`\nKicked: %v",
 					escapeMarkdownV2(sub.Username), sub.UserID, escapeMarkdownV2(sub.IP),
 					escapeMarkdownV2(now.Format("2006-01-02 15:04")), kickSuccess)
 
