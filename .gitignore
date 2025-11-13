@@ -1,0 +1,52 @@
+# Environment variables
+.env
+
+# Subscription data
+subscriptions.json
+test_*.json
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bot
+subscription-bot
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+debug_*.txt
+zalando_*.txt
+
+# Old files
+*.old
+*.bak
+
+# HTML captures and JSON data
+*.html
+captured-apis-*.json
+rendered_*.html
