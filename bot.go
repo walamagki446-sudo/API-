@@ -36,7 +36,7 @@ type Subscription struct {
 // Config holds bot configuration
 type Config struct {
 	TelegramToken string
-	AdminID       int64
+	AdminIDs      []int64
 	GroupChatID   int64
 	LogChatID     int64
 }
@@ -66,7 +66,7 @@ func main() {
 
 	config = Config{
 		TelegramToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
-		AdminID:       getEnvAsInt64("ADMIN_ID", 0),
+		AdminIDs:      getEnvAsInt64Slice("ADMIN_IDS", []int64{}),
 		GroupChatID:   getEnvAsInt64("GROUP_CHAT_ID", 0),
 		LogChatID:     getEnvAsInt64("LOG_CHAT_ID", 0),
 	}
@@ -89,6 +89,13 @@ func main() {
 
 	bot.Debug = false
 	log.Printf("[INFO] Bot started: @%s", bot.Self.UserName)
+	
+	// Log admin configuration
+	if len(config.AdminIDs) > 0 {
+		log.Printf("[INFO] Configured %d admin(s): %v", len(config.AdminIDs), config.AdminIDs)
+	} else {
+		log.Println("[INFO] No admin restrictions - all users can use commands")
+	}
 	
 	// Count active subscriptions only
 	activeCount := 0
@@ -221,7 +228,7 @@ func (s *Storage) GetAllActiveSubscriptions() []*Subscription {
 
 func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	// Only admins can use commands
-	if config.AdminID != 0 && msg.From.ID != config.AdminID {
+	if len(config.AdminIDs) > 0 && !isAdmin(msg.From.ID) {
 		return
 	}
 
@@ -751,6 +758,43 @@ func getEnvAsInt64(key string, defaultVal int64) int64 {
 	var val int64
 	fmt.Sscanf(valStr, "%d", &val)
 	return val
+}
+
+// getEnvAsInt64Slice parses comma-separated admin IDs from environment variable
+func getEnvAsInt64Slice(key string, defaultVal []int64) []int64 {
+	valStr := os.Getenv(key)
+	if valStr == "" {
+		return defaultVal
+	}
+	
+	// Split by comma and parse each ID
+	parts := strings.Split(valStr, ",")
+	var ids []int64
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		var id int64
+		if _, err := fmt.Sscanf(part, "%d", &id); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	
+	if len(ids) == 0 {
+		return defaultVal
+	}
+	return ids
+}
+
+// isAdmin checks if a user ID is in the admin list
+func isAdmin(userID int64) bool {
+	for _, adminID := range config.AdminIDs {
+		if adminID == userID {
+			return true
+		}
+	}
+	return false
 }
 
 // Simple hash function for username to userID conversion
