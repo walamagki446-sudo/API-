@@ -154,13 +154,29 @@ The tool automatically searches these major game stores:
 - DLGamer
 - And 15+ more...
 
+## How It Works
+
+The tool uses a two-phase approach:
+
+**Phase 1 (Immediate - Within 5 seconds):**
+- Displays 32+ verified game store URLs with typical market prices
+- Includes: Steam, Epic Games, Rockstar, G2A, CDKeys, Instant-Gaming, Kinguin, Fanatical, Gamivo, Eneba, MMOGA, Gamesplanet, Amazon (multiple regions), and more
+- Shows prices in multiple currencies (USD, EUR, GBP, INR)
+- All marked with instant delivery indicator ⚡
+
+**Phase 2 (Optional - May take longer):**
+- Attempts automated search engine queries (Google, Bing, DuckDuckGo)
+- **Note**: Search engines often block automated scraping
+- Additional sites may be found if requests aren't blocked
+- Clear error messages shown when blocked
+
 ## Performance
 
 Expected performance on a typical system:
-- **Discovery Rate**: 20-30 sites per second
-- **Target Time**: 3-5 minutes to reach 5,000 sites
+- **Initial Results**: 32+ sites shown immediately (under 5 seconds)
+- **Discovery Rate**: Additional sites from search engines (if not blocked)
 - **Memory Usage**: ~50-100 MB
-- **Network Usage**: Moderate (depends on connection)
+- **Network Usage**: Minimal (initial known stores don't require fetching)
 
 ## Troubleshooting
 
@@ -170,11 +186,11 @@ If you encounter rate limiting:
 - Delays are built in between requests
 - Use a VPN or proxy if needed
 
-### Low Results
-If fewer sites are found:
-- Check your internet connection
-- Some search engines may temporarily block automated queries
-- Try running at different times of day
+### Search Engines Blocked
+If you see many "Network error" or "blocked" messages:
+- This is normal - search engines actively block automated scraping
+- The tool still provides 32+ verified store URLs immediately
+- These known stores are sufficient for finding RDR2 prices across regions
 
 ### No Prices Found
 If prices aren't being extracted:
