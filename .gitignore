@@ -1,0 +1,39 @@
+# Binaries
+rdr2_site_finder
+zalando
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output files
+rdr2_sites_*.json
+rdr2_sites_*.txt
+zalando_valid_*.txt
+zalando_skipped_*.txt
+debug_*.txt
+captured-apis-*.json
+
+# HTML test files
+*.html
+
+# Go workspace file
+go.work
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
